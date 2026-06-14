@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  stockline-ivr:
+    build: .
+    container_name: stockline-ivr
+    ports:
+      - "5000:5000"
+    environment:
+      - FINNHUB_API_KEY=${FINNHUB_API_KEY}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER}
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=production
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+
+networks:
+  default:
+    name: stockline-network
