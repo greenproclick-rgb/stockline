@@ -45,7 +45,7 @@ def create_app():
     
     # Merge voice handler routes into main app
      blueprint = getattr(voice_handler.app, 'blueprint', None)
-    if blueprint is not None:
+     if blueprint is not None:
         app.register_blueprint(blueprint)
     for rule in voice_handler.app.url_map.iter_rules():
         if rule.endpoint != 'static':
