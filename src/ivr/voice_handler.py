@@ -52,12 +52,17 @@ class VoiceHandler:
             response = VoiceResponse()
             
             if digit == '1':
-                response.say("Using your keypad, enter the stock symbol digits then press pound.")
+                response.say("Enter the stock symbol digits then press pound.")
                 response.gather(finish_on_key='#', action=f'/call/get-quote/{call_sid}', method='POST', timeout=10)
+            elif digit == '2':
+                # FIXED: Now handles option 2 specifically
+                response.say("Please say the name of the company.")
+                response.gather(input='speech', action=f'/call/search-company/{call_sid}', method='POST', timeout=10)
             elif digit == '0':
                 response.say("Goodbye!")
                 response.hangup()
             else:
+                response.say("Returning to main menu.")
                 response.redirect('/call/incoming')
                 
             return Response(str(response), mimetype='application/xml')
@@ -66,31 +71,37 @@ class VoiceHandler:
         def get_stock_quote(call_sid):
             try:
                 digits = request.form.get('Digits', '')
-                symbol = map_t9_to_symbol(digits) # Uses the utility we created
+                # CRITICAL: Ensure map_t9_to_symbol is correctly imported
+                symbol = map_t9_to_symbol(digits) 
                 
                 response = VoiceResponse()
                 if not symbol:
-                    response.say("Symbol not recognized.")
+                    response.say("I could not translate those digits into a symbol. Please try again.")
                     response.redirect(f'/call/menu/{call_sid}')
                     return Response(str(response), mimetype='application/xml')
 
+                # Get Price
                 quote = self.call_manager.finnhub_client.get_quote(symbol)
                 if quote and quote.get('current_price'):
                     price = quote.get('current_price', 0)
                     response.say(f"The price for {symbol} is {price:.2f} dollars.")
-
-                    # RSS Analysis
-                    rss = AnalysisClient()
-                    analysis_text = rss.get_latest_news(symbol)
-                    response.say(analysis_text, voice='Polly.Joanna')
+                    
+                    # Try RSS Analysis but wrap in try/except so it doesn't crash the whole call
+                    try:
+                        rss = AnalysisClient()
+                        analysis_text = rss.get_latest_news(symbol)
+                        response.say(analysis_text, voice='Polly.Joanna')
+                    except Exception as rss_err:
+                        logger.error(f"RSS failed: {rss_err}")
+                        response.say("Analysis for this stock is currently unavailable.")
                 else:
-                    response.say(f"Could not find data for {symbol}.")
+                    response.say(f"Finnhub could not find data for symbol {symbol}.")
 
                 response.say("Press 1 for another quote, or 0 to hang up.")
                 response.gather(num_digits=1, action=f'/call/menu/{call_sid}')
                 return Response(str(response), mimetype='application/xml')
             except Exception as e:
-                logger.error(f"Error in quote flow: {e}")
+                logger.error(f"Quote Error: {e}")
                 return self._error_response()
 
         @self.app.route('/call/end', methods=['POST'])
