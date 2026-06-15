@@ -1,20 +1,28 @@
 import feedparser
 import re
 
-class RSSClient:
-    def get_analysis(self, symbol):
-        # Seeking Alpha RSS URL
+class AnalysisClient:
+    def __init__(self):
+        # We add a User-Agent so Seeking Alpha doesn't block the request as a bot
+        self.headers = {'User-Agent': 'Mozilla/5.0'}
+
+    def get_latest_news(self, symbol):
         url = f"https://seekingalpha.com/symbol/{symbol.upper()}/feed"
+        
+        # Parse the feed
         feed = feedparser.parse(url)
         
         if not feed.entries:
-            return f"No recent analysis found for {symbol}."
-            
-        # Get latest entry and clean HTML tags
-        latest = feed.entries[0]
-        summary_clean = re.sub('<[^<]+?>', '', latest.summary)
+            return f"I'm sorry, I couldn't find any recent analysis for {symbol}."
+
+        # Get the most recent article
+        latest_article = feed.entries[0]
+        title = latest_article.title
         
-        return {
-            'title': latest.title,
-            'summary': summary_clean[:400] # Limit length for voice
-        }
+        # Clean the HTML out of the summary
+        clean_summary = re.sub('<[^<]+?>', '', latest_article.summary)
+        
+        # Shorten it so the phone call isn't too long
+        short_summary = (clean_summary[:350] + '...') if len(clean_summary) > 350 else clean_summary
+
+        return f"Latest headline for {symbol}: {title}. The summary says: {short_summary}"
