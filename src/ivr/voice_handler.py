@@ -51,21 +51,7 @@ class VoiceHandler:
             digit = request.form.get('Digits', '')
             response = VoiceResponse()
             
-            if digit == '1':
-                response.say("Enter the stock symbol digits then press pound.")
-                response.gather(finish_on_key='#', action=f'/call/get-quote/{call_sid}', method='POST', timeout=10)
-            elif digit == '2':
-                # FIXED: Now handles option 2 specifically
-                response.say("Please say the name of the company.")
-                response.gather(input='speech', action=f'/call/search-company/{call_sid}', method='POST', timeout=10)
-            elif digit == '0':
-                response.say("Goodbye!")
-                response.hangup()
-            else:
-                response.say("Returning to main menu.")
-                response.redirect('/call/incoming')
-                
-            return Response(str(response), mimetype='application/xml')
+             
 
         @self.app.route('/call/get-quote/<call_sid>', methods=['POST'])
         def get_stock_quote(call_sid):
