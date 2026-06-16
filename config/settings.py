@@ -31,10 +31,15 @@ class Settings:
     # IVR Settings
     max_retries = int(os.getenv('MAX_RETRIES', '3'))
     timeout_seconds = int(os.getenv('TIMEOUT_SECONDS', '30'))
-    
+
+    # FMP
+    fmp_api_key = os.getenv('FMP_API_KEY')
+
     def __init__(self):
         """Validate required settings."""
         if not self.finnhub_api_key:
             raise ValueError("FINNHUB_API_KEY environment variable not set")
         if not self.twilio_account_sid or not self.twilio_auth_token:
             raise ValueError("Twilio credentials not set")
+        if not self.fmp_api_key:
+            raise ValueError("FMP_API_KEY environment variable not set")
