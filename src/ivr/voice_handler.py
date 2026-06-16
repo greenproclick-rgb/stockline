@@ -3,11 +3,10 @@ from twilio.twiml.voice_response import VoiceResponse, Gather
 import requests
 import logging
 from src.api.rss_client import AnalysisClient
-from .voice_handler import VoiceHandler # If needed, but usually not inside itself
-from src.api.rss_client import AnalysisClient
-from src.ivr.utils import map_t9_to_symbol
+from src.ivr.utils import map_t9_to_symbol 
 
 logger = logging.getLogger(__name__)
+
 
 class VoiceHandler:
     def __init__(self, call_manager, settings):
