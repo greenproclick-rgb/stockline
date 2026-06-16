@@ -5,7 +5,7 @@ import logging
 from src.api.rss_client import AnalysisClient
 from .voice_handler import VoiceHandler # If needed, but usually not inside itself
 from src.api.rss_client import AnalysisClient
-from src.utils.t9_decoder import map_t9_to_symbol
+from src.ivr.utils import map_t9_to_symbol
 
 logger = logging.getLogger(__name__)
 
