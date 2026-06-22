@@ -7,13 +7,13 @@ from src.ivr.utils import map_t9_to_symbol
 
 logger = logging.getLogger(__name__)
 
-
 class VoiceHandler:
     def __init__(self, call_manager, settings):
         self.call_manager = call_manager
         self.settings = settings
         self.app = Flask(__name__)
-        self.fmp_key = settings.fmp_api_key
+        # ENSURE THIS MATCHES YOUR settings.py VARIABLE NAME
+        self.fmp_key = getattr(settings, 'fmp_api_key', None) 
         self.setup_routes()
 
     def setup_routes(self):
@@ -31,100 +31,79 @@ class VoiceHandler:
         def handle_menu_selection():
             digit = request.form.get('Digits', '')
             response = VoiceResponse()
-            
             if digit == '1':
                 gather = Gather(num_digits=10, finish_on_key='#', action='/call/get-quote', method='POST', timeout=15)
-                gather.say("Enter symbol digits followed by pound. For example, for Apple, press 2 1 2 1 7 1 5 3 pound.")
+                gather.say("Enter symbol digits followed by pound.")
                 response.append(gather)
             elif digit == '3':
                 gather = Gather(num_digits=1, action='/call/movers-menu', method='POST', timeout=10)
-                gather.say("For top gainers, press 1. For top losers, press 2. For trending and active, press 3.")
+                gather.say("For top gainers, press 1. For top losers, press 2. For actives, press 3.")
                 response.append(gather)
             elif digit == '4':
                 response.redirect('/call/market-recap')
-            elif digit == '*':
-                response.redirect('/call/incoming')
             else:
-                response.say("Invalid selection.")
                 response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
 
-        # 2. STICKY QUOTE LOGIC
+        # 2. FIXED QUOTE LOGIC (Adds Uppercase)
         @self.app.route('/call/get-quote', methods=['POST'])
         def get_stock_quote():
             digits = request.form.get('Digits', '')
-            symbol = request.args.get('symbol') or map_t9_to_symbol(digits)
-            call_sid = request.form.get('CallSid')
+            raw_symbol = request.args.get('symbol') or map_t9_to_symbol(digits)
+            
+            if not raw_symbol:
+                response = VoiceResponse()
+                response.say("I could not understand that symbol.")
+                response.redirect('/call/incoming')
+                return Response(str(response), mimetype='application/xml')
+
+            symbol = raw_symbol.upper() # FINNHUB NEEDS UPPERCASE
             response = VoiceResponse()
             
             try:
                 quote = self.call_manager.finnhub_client.get_quote(symbol)
                 price = quote.get('c', 0)
-                change = quote.get('dp', 0)
-                
                 if price == 0:
                     response.say(f"I'm sorry, I couldn't find a quote for {symbol}.")
                     response.redirect('/call/incoming')
                 else:
-                    response.say(f"{symbol} is trading at {price} dollars, {'up' if change >= 0 else 'down'} {abs(change):.2f} percent.")
-                    
-                    # STICKY MENU
+                    response.say(f"{symbol} is trading at {price} dollars.")
                     gather = Gather(num_digits=1, action=f'/call/quote-options?symbol={symbol}', method='POST', timeout=15)
-                    gather.say("Press 1 for latest analysis. Press 2 for key financials and target price. Press star to go back.")
+                    gather.say("Press 1 for analysis. Press 2 for financials. Press star to go back.")
                     response.append(gather)
             except Exception as e:
-                logger.error(f"Quote error: {e}")
-                response.say("Error retrieving quote data.")
+                logger.error(f"Finnhub Error: {e}")
+                response.say("Error reaching the quote service.")
                 response.redirect('/call/incoming')
-                
             return Response(str(response), mimetype='application/xml')
 
-        @self.app.route('/call/quote-options', methods=['POST'])
-        def quote_options():
-            symbol = request.args.get('symbol')
-            digit = request.form.get('Digits', '')
-            response = VoiceResponse()
-            
-            if digit == '1': # ANALYSIS
-                rss = AnalysisClient()
-                news = rss.get_latest_news(symbol)
-                response.say(news)
-                response.redirect(f'/call/get-quote?symbol={symbol}') # Loop back
-            elif digit == '2': # FINANCIALS
-                try:
-                    url = f"https://financialmodelingprep.com/api/v3/quote/{symbol}?apikey={self.fmp_key}"
-                    data = requests.get(url, timeout=5).json()
-                    if data:
-                        s = data[0]
-                        response.say(f"{symbol} fifty two week range is {s['yearLow']} to {s['yearHigh']}. "
-                                     f"Average volume is {s['avgVolume']}. Market cap is {s['marketCap']}. "
-                                     f"The day high is {s['dayHigh']} and the day low is {s['dayLow']}.")
-                    else:
-                        response.say("Financial details not found.")
-                except:
-                    response.say("Unable to reach financials server.")
-                response.redirect(f'/call/get-quote?symbol={symbol}') # Loop back
-            elif digit == '*':
-                response.redirect('/call/incoming')
-            else:
-                response.redirect(f'/call/get-quote?symbol={symbol}')
-                
-            return Response(str(response), mimetype='application/xml')
-
-        # 3. MARKET MOVERS
+        # 3. FIXED MOVERS (Adds API Key Check)
         @self.app.route('/call/movers-menu', methods=['POST'])
         def movers_menu():
             digit = request.form.get('Digits', '')
             response = VoiceResponse()
             
+            if not self.fmp_key:
+                logger.error("FMP_API_KEY is missing in VoiceHandler!")
+                response.say("Internal configuration error. API key not found.")
+                response.redirect('/call/incoming')
+                return Response(str(response), mimetype='application/xml')
+
             endpoint = "gainers" if digit == '1' else "losers" if digit == '2' else "actives"
             try:
                 url = f"https://financialmodelingprep.com/api/v3/{endpoint}?apikey={self.fmp_key}"
-                data = requests.get(url, timeout=5).json()
-                response.say(f"Here are the top three {endpoint} items.")
-                for stock in data[:3]:
-                    response.say(f"{stock['symbol']}, {stock['changesPercentage']} percent.")
-            except:
+                r = requests.get(url, timeout=5)
+                data = r.json()
+                
+                if isinstance(data, dict) and "Error Message" in data:
+                    logger.error(f"FMP API Error: {data['Error Message']}")
+                    response.say("The financial data provider rejected the request.")
+                else:
+                    response.say(f"Here are the top three {endpoint}.")
+                    for stock in data[:3]:
+                        response.say(f"{stock['symbol']}, {stock['changesPercentage']} percent.")
+            except Exception as e:
+                logger.error(f"FMP Connection Error: {e}")
                 response.say("Movers data is currently unavailable.")
             
             response.redirect('/call/incoming')
@@ -136,15 +115,9 @@ class VoiceHandler:
             response = VoiceResponse()
             try:
                 rss = AnalysisClient()
-                recap = rss.get_top_gainers() # MarketWatch or Investing.com RSS
+                recap = rss.get_top_gainers()
                 response.say(recap)
             except:
                 response.say("Market recap is currently unavailable.")
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
-
-    def _error_response(self):
-        response = VoiceResponse()
-        response.say("An unexpected error occurred. Returning to the main menu.")
-        response.redirect('/call/incoming')
-        return Response(str(response), mimetype='application/xml')
