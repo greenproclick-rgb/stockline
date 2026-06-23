@@ -12,18 +12,18 @@ class VoiceHandler:
         self.call_manager = call_manager
         self.settings = settings
         self.app = Flask(__name__)
-        # FORCE RE-READ FROM OS TO BE SAFE
-        import os
-        self.fmp_key = os.getenv('FMP_API_KEY')
+        # ENSURE THIS MATCHES YOUR settings.py VARIABLE NAME
+        self.fmp_key = getattr(settings, 'fmp_api_key', None) 
         self.setup_routes()
 
     def setup_routes(self):
+        # 1. MAIN MENU
         @self.app.route('/call/incoming', methods=['POST'])
         def handle_incoming_call():
             response = VoiceResponse()
             response.say("Welcome to Stockline.")
             gather = Gather(num_digits=1, action='/call/menu', method='POST', timeout=10)
-            gather.say("Press 1 for stock quotes. Press 3 for market movers. Press 4 for market recap.")
+            gather.say("Press 1 for stock quotes. Press 2 for voice search. Press 3 for market movers. Press 4 for market recap. Press star at any time to return here.")
             response.append(gather)
             return Response(str(response), mimetype='application/xml')
 
@@ -39,67 +39,110 @@ class VoiceHandler:
                 gather = Gather(num_digits=1, action='/call/movers-menu', method='POST', timeout=10)
                 gather.say("For top gainers, press 1. For top losers, press 2. For actives, press 3.")
                 response.append(gather)
+            elif digit == '4':
+                response.redirect('/call/market-recap')
             else:
                 response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
 
+        # 2. QUOTE LOGIC (Uses FinancialModelingPrep API)
         @self.app.route('/call/get-quote', methods=['POST'])
         def get_stock_quote():
-            digits = request.form.get('Digits', '').replace('#', '') # Clean digits
-            # LOGGING THE DIGITS TO RAILWAY
-            logger.info(f"Received digits: {digits}")
+            digits = request.form.get('Digits', '')
+            raw_symbol = request.args.get('symbol') or map_t9_to_symbol(digits)
             
-            symbol = map_t9_to_symbol(digits)
-            response = VoiceResponse()
-            
-            if not symbol:
-                logger.error(f"T9 mapping failed for digits: {digits}")
-                response.say("I could not identify that stock symbol.")
+            if not raw_symbol:
+                response = VoiceResponse()
+                response.say("I could not understand that symbol.")
                 response.redirect('/call/incoming')
                 return Response(str(response), mimetype='application/xml')
 
-            symbol = symbol.upper()
+            symbol = raw_symbol.upper()  # FMP expects uppercase symbols
+            response = VoiceResponse()
+
+            if not self.fmp_key:
+                logger.error("FMP_API_KEY is missing in VoiceHandler for get-quote!")
+                response.say("Internal configuration error. API key not found.")
+                response.redirect('/call/incoming')
+                return Response(str(response), mimetype='application/xml')
+
             try:
-                quote = self.call_manager.finnhub_client.get_quote(symbol)
-                price = quote.get('c', 0)
-                if price == 0:
-                    response.say(f"No price found for {symbol}.")
+                url = f"https://financialmodelingprep.com/api/v3/quote/{symbol}?apikey={self.fmp_key}"
+                r = requests.get(url, timeout=5)
+                data = r.json()
+                logger.debug(f"FMP quote response for {symbol}: {data}")
+
+                # FMP returns a list for the quote endpoint: [] or [{...}]
+                if isinstance(data, dict) and data.get("Error Message"):
+                    logger.error(f"FMP API Error: {data.get('Error Message')}")
+                    response.say("The financial data provider rejected the request.")
+                    response.redirect('/call/incoming')
+                elif not data or (isinstance(data, list) and len(data) == 0):
+                    response.say(f"I'm sorry, I couldn't find a quote for {symbol}.")
+                    response.redirect('/call/incoming')
                 else:
-                    response.say(f"{symbol} is at {price} dollars.")
-                    gather = Gather(num_digits=1, action=f'/call/quote-options?symbol={symbol}', method='POST')
-                    gather.say("Press 1 for analysis. Press 2 for financials.")
-                    response.append(gather)
-            except:
-                response.say("Finance service busy.")
-            
-            response.redirect('/call/incoming')
+                    quote = data[0] if isinstance(data, list) else data
+                    raw_price = quote.get('price')
+                    try:
+                        price = float(raw_price) if raw_price is not None else 0
+                    except (TypeError, ValueError):
+                        price = 0
+
+                    if price == 0:
+                        response.say(f"I'm sorry, I couldn't find a quote for {symbol}.")
+                        response.redirect('/call/incoming')
+                    else:
+                        response.say(f"{symbol} is trading at {price:.2f} dollars.")
+                        gather = Gather(num_digits=1, action=f'/call/quote-options?symbol={symbol}', method='POST', timeout=15)
+                        gather.say("Press 1 for analysis. Press 2 for financials. Press star to go back.")
+                        response.append(gather)
+            except Exception as e:
+                logger.error(f"FMP Error: {e}")
+                response.say("Error reaching the quote service.")
+                response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
 
+        # 3. FIXED MOVERS (Adds API Key Check)
         @self.app.route('/call/movers-menu', methods=['POST'])
         def movers_menu():
             digit = request.form.get('Digits', '')
             response = VoiceResponse()
             
-            # FMP Key Check
             if not self.fmp_key:
-                response.say("Movers key is missing in system variables.")
+                logger.error("FMP_API_KEY is missing in VoiceHandler!")
+                response.say("Internal configuration error. API key not found.")
+                response.redirect('/call/incoming')
                 return Response(str(response), mimetype='application/xml')
 
             endpoint = "gainers" if digit == '1' else "losers" if digit == '2' else "actives"
             try:
-                # API Key is passed as 'apikey' (all lowercase, no dash)
-                url = f"https://financialmodelingprep.com/api/v3/stock_market/{endpoint}?apikey={self.fmp_key}"
+                url = f"https://financialmodelingprep.com/api/v3/{endpoint}?apikey={self.fmp_key}"
                 r = requests.get(url, timeout=5)
                 data = r.json()
                 
-                if isinstance(data, dict) and ("Error" in str(data)):
-                    response.say("The data provider declined the access key.")
+                if isinstance(data, dict) and "Error Message" in data:
+                    logger.error(f"FMP API Error: {data['Error Message']}")
+                    response.say("The financial data provider rejected the request.")
                 else:
                     response.say(f"Here are the top three {endpoint}.")
                     for stock in data[:3]:
                         response.say(f"{stock['symbol']}, {stock['changesPercentage']} percent.")
-            except:
-                response.say("Could not connect to movers service.")
+            except Exception as e:
+                logger.error(f"FMP Connection Error: {e}")
+                response.say("Movers data is currently unavailable.")
             
+            response.redirect('/call/incoming')
+            return Response(str(response), mimetype='application/xml')
+
+        # 4. MARKET RECAP
+        @self.app.route('/call/market-recap', methods=['POST'])
+        def market_recap():
+            response = VoiceResponse()
+            try:
+                rss = AnalysisClient()
+                recap = rss.get_top_gainers()
+                response.say(recap)
+            except:
+                response.say("Market recap is currently unavailable.")
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
