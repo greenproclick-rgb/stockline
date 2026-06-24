@@ -37,7 +37,7 @@ class AnalysisClient:
             logger.error(f"RSS Client Error: {e}")
             return "I am unable to reach the news analysis server right now."
 
-    def get_top_gainers(self):
+    def get_market_recap(self):
         """Market summary from a stable source."""
         url = "https://www.marketwatch.com/rss/topstories"
         try:

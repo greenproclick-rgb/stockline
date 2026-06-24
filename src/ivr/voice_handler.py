@@ -1,9 +1,8 @@
 from flask import Flask, request, Response
 from twilio.twiml.voice_response import VoiceResponse, Gather
-import requests
 import logging
 from src.api.rss_client import AnalysisClient
-from src.ivr.utils import map_t9_to_symbol 
+from src.ivr.utils import map_t9_to_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +11,7 @@ class VoiceHandler:
         self.call_manager = call_manager
         self.settings = settings
         self.app = Flask(__name__)
-        # ENSURE THIS MATCHES YOUR settings.py VARIABLE NAME
-        self.fmp_key = getattr(settings, 'fmp_api_key', None) 
+        self.finnhub_client = getattr(call_manager, 'finnhub_client', None)
         self.setup_routes()
 
     def setup_routes(self):
@@ -45,92 +43,39 @@ class VoiceHandler:
                 response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
 
-        # 2. QUOTE LOGIC (Uses FinancialModelingPrep API with fallback)
+        # 2. QUOTE FLOW — uses Finnhub
         @self.app.route('/call/get-quote', methods=['POST'])
         def get_stock_quote():
             digits = request.form.get('Digits', '')
             raw_symbol = request.args.get('symbol') or map_t9_to_symbol(digits)
-            
+
+            response = VoiceResponse()
+
             if not raw_symbol:
-                response = VoiceResponse()
                 response.say("I could not understand that symbol.")
                 response.redirect('/call/incoming')
                 return Response(str(response), mimetype='application/xml')
 
-            symbol = raw_symbol.upper()  # FMP expects uppercase symbols
-            response = VoiceResponse()
+            symbol = raw_symbol.upper()
 
-            if not self.fmp_key:
-                logger.error("FMP_API_KEY is missing in VoiceHandler for get-quote!")
-                response.say("Internal configuration error. API key not found.")
+            if not self.finnhub_client:
+                logger.error("Finnhub client not available in VoiceHandler.")
+                response.say("Internal configuration error. Please try again later.")
                 response.redirect('/call/incoming')
                 return Response(str(response), mimetype='application/xml')
 
             try:
-                url = f"https://financialmodelingprep.com/api/v3/quote/{symbol}?apikey={self.fmp_key}"
-                r = requests.get(url, timeout=5)
+                quote = self.finnhub_client.get_quote(symbol)
+                logger.debug(f"Finnhub quote for {symbol}: {quote}")
 
-                # If non-200, inspect and try fallback
-                if r.status_code != 200:
-                    logger.error(f"FMP HTTP {r.status_code} for quote {symbol}: {r.text}")
-                    # Detect legacy-endpoint error message in body
-                    try:
-                        body = r.json()
-                    except Exception:
-                        body = None
-
-                    legacy_msg = None
-                    if isinstance(body, dict):
-                        # common shapes
-                        legacy_msg = body.get('Error Message') or body.get('error') or body.get('message')
-
-                    if legacy_msg and 'Legacy Endpoint' in legacy_msg:
-                        logger.info("FMP legacy endpoint detected, attempting Finnhub fallback if configured")
-                        # Attempt Finnhub fallback if available
-                        try:
-                            fh_client = getattr(self.call_manager, 'finnhub_client', None)
-                            if fh_client:
-                                fh_quote = fh_client.get_quote(symbol)
-                                if fh_quote and fh_quote.get('current_price'):
-                                    price = fh_quote.get('current_price')
-                                    response.say(f"{symbol} is trading at {price:.2f} dollars.")
-                                    gather = Gather(num_digits=1, action=f'/call/quote-options?symbol={symbol}', method='POST', timeout=15)
-                                    gather.say("Press 1 for analysis. Press 2 for financials. Press star to go back.")
-                                    response.append(gather)
-                                    return Response(str(response), mimetype='application/xml')
-                        except Exception as e:
-                            logger.error(f"Finnhub fallback error: {e}")
-
-                        response.say("The financial data provider rejected the request. Please update the configured API or try again later.")
-                        response.redirect('/call/incoming')
-                        return Response(str(response), mimetype='application/xml')
-
-                    # Other non-200 errors
-                    response.say("The financial data provider rejected the request.")
-                    response.redirect('/call/incoming')
-                    return Response(str(response), mimetype='application/xml')
-
-                data = r.json()
-                logger.debug(f"FMP quote response for {symbol}: {data}")
-
-                # FMP returns a list for the quote endpoint: [] or [{...}]
-                if isinstance(data, dict):
-                    # handle error shapes like {"Error Message": "..."} or {"error":"..."}
-                    if data.get("Error Message") or data.get('error') or data.get('message'):
-                        logger.error(f"FMP API Error for {symbol}: {data}")
-                        response.say("The financial data provider rejected the request.")
-                        response.redirect('/call/incoming')
-                        return Response(str(response), mimetype='application/xml')
-
-                if not data or (isinstance(data, list) and len(data) == 0):
+                if not quote:
                     response.say(f"I'm sorry, I couldn't find a quote for {symbol}.")
                     response.redirect('/call/incoming')
                     return Response(str(response), mimetype='application/xml')
 
-                quote = data[0] if isinstance(data, list) else data
-                raw_price = quote.get('price')
+                price = quote.get('current_price') or 0
                 try:
-                    price = float(raw_price) if raw_price is not None else 0
+                    price = float(price)
                 except (TypeError, ValueError):
                     price = 0
 
@@ -140,77 +85,177 @@ class VoiceHandler:
                 else:
                     response.say(f"{symbol} is trading at {price:.2f} dollars.")
                     gather = Gather(num_digits=1, action=f'/call/quote-options?symbol={symbol}', method='POST', timeout=15)
-                    gather.say("Press 1 for analysis. Press 2 for financials. Press star to go back.")
+                    gather.say("Press 1 for full details. Press 2 for analysis and news. Press star for the main menu.")
                     response.append(gather)
             except Exception as e:
-                logger.error(f"FMP Error: {e}")
-                response.say("Error reaching the quote service.")
+                logger.error(f"Error fetching quote for {symbol}: {e}")
+                response.say("Error reaching the quote service. Please try again.")
                 response.redirect('/call/incoming')
+
             return Response(str(response), mimetype='application/xml')
 
-        # 3. FIXED MOVERS (Adds API Key Check and error handling)
+        # 2a. QUOTE FOLLOW-UP OPTIONS
+        @self.app.route('/call/quote-options', methods=['POST'])
+        def quote_options():
+            digit = request.form.get('Digits', '')
+            symbol = request.args.get('symbol', '')
+            response = VoiceResponse()
+
+            if digit == '1':
+                response.redirect(f'/call/quote-info?symbol={symbol}')
+            elif digit == '2':
+                response.redirect(f'/call/quote-analysis?symbol={symbol}')
+            else:
+                response.redirect('/call/incoming')
+
+            return Response(str(response), mimetype='application/xml')
+
+        # 2b. ALL AVAILABLE INFO for a symbol
+        @self.app.route('/call/quote-info', methods=['POST', 'GET'])
+        def quote_info():
+            symbol = request.args.get('symbol', '').upper()
+            response = VoiceResponse()
+
+            if not symbol:
+                response.say("No symbol provided.")
+                response.redirect('/call/incoming')
+                return Response(str(response), mimetype='application/xml')
+
+            if not self.finnhub_client:
+                response.say("Internal configuration error. Please try again later.")
+                response.redirect('/call/incoming')
+                return Response(str(response), mimetype='application/xml')
+
+            parts = []
+
+            try:
+                financials = self.finnhub_client.get_basic_financials(symbol)
+                if financials:
+                    w52h = financials.get('week_52_high')
+                    w52l = financials.get('week_52_low')
+                    pe = financials.get('pe_ratio')
+                    if w52h is not None and w52l is not None:
+                        parts.append(f"52-week range: {float(w52l):.2f} to {float(w52h):.2f} dollars.")
+                    if pe is not None:
+                        parts.append(f"Price to earnings ratio: {float(pe):.2f}.")
+            except Exception as e:
+                logger.error(f"Error fetching basic financials for {symbol}: {e}")
+
+            try:
+                price_target = self.finnhub_client.get_price_target(symbol)
+                if price_target and price_target.get('target_price') is not None:
+                    parts.append(f"Analyst price target: {float(price_target['target_price']):.2f} dollars.")
+            except Exception as e:
+                logger.error(f"Error fetching price target for {symbol}: {e}")
+
+            try:
+                recs = self.finnhub_client.get_recommendation_trends(symbol)
+                if recs:
+                    buy_total = (recs.get('buy') or 0) + (recs.get('strong_buy') or 0)
+                    hold_total = recs.get('hold') or 0
+                    sell_total = (recs.get('sell') or 0) + (recs.get('strong_sell') or 0)
+                    parts.append(f"Analyst ratings: {buy_total} buy, {hold_total} hold, {sell_total} sell.")
+            except Exception as e:
+                logger.error(f"Error fetching recommendations for {symbol}: {e}")
+
+            if parts:
+                response.say(f"Here is the available information for {symbol}. " + " ".join(parts))
+            else:
+                response.say(f"Detailed information for {symbol} is not available at this time.")
+
+            gather = Gather(num_digits=1, action=f'/call/quote-options?symbol={symbol}', method='POST', timeout=10)
+            gather.say("Press 1 to hear this info again. Press 2 for analysis. Press star to return to the main menu.")
+            response.append(gather)
+
+            return Response(str(response), mimetype='application/xml')
+
+        # 2c. ANALYSIS / NEWS for a symbol
+        @self.app.route('/call/quote-analysis', methods=['POST', 'GET'])
+        def quote_analysis():
+            symbol = request.args.get('symbol', '').upper()
+            response = VoiceResponse()
+
+            if not symbol:
+                response.say("No symbol provided.")
+                response.redirect('/call/incoming')
+                return Response(str(response), mimetype='application/xml')
+
+            try:
+                analysis_client = AnalysisClient()
+                analysis_text = analysis_client.get_latest_news(symbol)
+                response.say(f"Here is the latest analysis for {symbol}. {analysis_text}")
+            except Exception as e:
+                logger.error(f"Error fetching analysis for {symbol}: {e}")
+                response.say(f"Analysis for {symbol} is not available at this time.")
+
+            gather = Gather(num_digits=1, action=f'/call/quote-options?symbol={symbol}', method='POST', timeout=10)
+            gather.say("Press 1 for all available info. Press 2 to hear analysis again. Press star to return to the main menu.")
+            response.append(gather)
+
+            return Response(str(response), mimetype='application/xml')
+
+        # 3. MARKET MOVERS — uses Finnhub
         @self.app.route('/call/movers-menu', methods=['POST'])
         def movers_menu():
             digit = request.form.get('Digits', '')
             response = VoiceResponse()
-            
-            if not self.fmp_key:
-                logger.error("FMP_API_KEY is missing in VoiceHandler!")
-                response.say("Internal configuration error. API key not found.")
+
+            if not self.finnhub_client:
+                logger.error("Finnhub client not available in VoiceHandler for movers.")
+                response.say("Internal configuration error. Please try again later.")
                 response.redirect('/call/incoming')
                 return Response(str(response), mimetype='application/xml')
 
-            endpoint = "gainers" if digit == '1' else "losers" if digit == '2' else "actives"
+            category_map = {'1': 'gainers', '2': 'losers', '3': 'actives'}
+            category = category_map.get(digit, 'actives')
+            label = category
+
             try:
-                url = f"https://financialmodelingprep.com/api/v3/{endpoint}?apikey={self.fmp_key}"
-                r = requests.get(url, timeout=5)
-
-                if r.status_code != 200:
-                    logger.error(f"FMP HTTP {r.status_code} for {endpoint}: {r.text}")
-                    try:
-                        body = r.json()
-                    except Exception:
-                        body = None
-
-                    legacy_msg = None
-                    if isinstance(body, dict):
-                        legacy_msg = body.get('Error Message') or body.get('error') or body.get('message')
-
-                    if legacy_msg and 'Legacy Endpoint' in legacy_msg:
-                        logger.info("FMP legacy endpoint detected for movers; no fallback available")
-                        response.say("Market movers are not available from the configured provider. Please update your API subscription or try again later.")
-                        response.redirect('/call/incoming')
-                        return Response(str(response), mimetype='application/xml')
-
-                    response.say("The financial data provider rejected the request.")
-                    response.redirect('/call/incoming')
-                    return Response(str(response), mimetype='application/xml')
-
-                data = r.json()
-                
-                if isinstance(data, dict) and (data.get('Error Message') or data.get('error') or data.get('message')):
-                    logger.error(f"FMP API Error: {data}")
-                    response.say("The financial data provider rejected the request.")
+                movers = self.finnhub_client.get_market_movers(category)
+                if not movers:
+                    response.say(f"Market {label} data is not available at this time.")
                 else:
-                    response.say(f"Here are the top three {endpoint}.")
-                    for stock in data[:3]:
-                        response.say(f"{stock.get('symbol')}, {stock.get('changesPercentage')} percent.")
+                    response.say(f"Here are the top {label} right now.")
+                    for stock in movers:
+                        direction = "up" if stock['change_pct'] >= 0 else "down"
+                        response.say(
+                            f"{stock['symbol']}, {direction} {abs(stock['change_pct']):.2f} percent, "
+                            f"trading at {stock['price']:.2f} dollars."
+                        )
             except Exception as e:
-                logger.error(f"FMP Connection Error: {e}")
-                response.say("Movers data is currently unavailable.")
-            
+                logger.error(f"Error fetching market movers ({category}): {e}")
+                response.say("Movers data is currently unavailable. Please try again later.")
+
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
 
-        # 4. MARKET RECAP
+        # 4. MARKET RECAP — Finnhub news with RSS fallback
         @self.app.route('/call/market-recap', methods=['POST'])
         def market_recap():
             response = VoiceResponse()
+
+            # Try Finnhub general market news first
+            if self.finnhub_client:
+                try:
+                    news_items = self.finnhub_client.get_market_news()
+                    if news_items:
+                        headlines = [item['headline'] for item in news_items if item.get('headline')]
+                        if headlines:
+                            response.say("Here is the latest market recap. " + " ".join(f"{h}." for h in headlines[:3]))
+                            response.redirect('/call/incoming')
+                            return Response(str(response), mimetype='application/xml')
+                except Exception as e:
+                    logger.error(f"Finnhub market news error: {e}")
+
+            # Fallback to MarketWatch RSS
             try:
                 rss = AnalysisClient()
-                recap = rss.get_top_gainers()
+                recap = rss.get_market_recap()
                 response.say(recap)
-            except:
-                response.say("Market recap is currently unavailable.")
+            except Exception as e:
+                logger.error(f"RSS market recap error: {e}")
+                response.say("Market recap is currently unavailable. Please try again later.")
+
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
+
