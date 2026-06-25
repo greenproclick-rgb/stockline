@@ -41,5 +41,3 @@ class Settings:
             raise ValueError("FINNHUB_API_KEY environment variable not set")
         if not self.twilio_account_sid or not self.twilio_auth_token:
             raise ValueError("Twilio credentials not set")
-        if not self.fmp_api_key:
-            raise ValueError("FMP_API_KEY environment variable not set")
