@@ -203,7 +203,7 @@ class VoiceHandler:
             try:
                 movers = self.finnhub_client.get_market_movers(side)
                 if movers:
-                    response.say(f"Here are the top {len(movers)} {side}.")
+                    response.say(f"Here are the top {len(movers)} {side} in the S and P 500.")
                     for m in movers:
                         direction = "up" if m['pct_change'] >= 0 else "down"
                         response.say(
@@ -230,13 +230,11 @@ class VoiceHandler:
                 return Response(str(response), mimetype='application/xml')
 
             try:
-                news = self.finnhub_client.get_market_news()
-                if news:
+                recap = self.finnhub_client.get_market_summary()
+                if recap:
                     response.say("Here is today's market recap.")
-                    for item in news[:3]:
-                        headline = item.get('headline', '').strip()
-                        if headline:
-                            response.say(headline + ".")
+                    for line in recap[:5]:
+                        response.say(line)
                 else:
                     response.say("Market recap is currently unavailable.")
             except Exception as e:
@@ -245,4 +243,3 @@ class VoiceHandler:
 
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
-

@@ -5,12 +5,19 @@ Finnhub API client for retrieving stock data.
 import finnhub
 import logging
 from typing import Dict, Optional, List
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 
 logger = logging.getLogger(__name__)
 
 class FinnhubClient:
     """Client for interacting with Finnhub API."""
+    _SP500_INDEX_SYMBOL = '^GSPC'
+    _UNIVERSE_CACHE_TTL = timedelta(hours=6)
+    _MARKET_INDEXES = [
+        ('SPY', 'S and P 500'),
+        ('QQQ', 'Nasdaq 100'),
+        ('DIA', 'Dow Jones'),
+    ]
     
     def __init__(self, api_key: str):
         """Initialize Finnhub client.
@@ -196,13 +203,46 @@ class FinnhubClient:
             self.logger.error(f"Error fetching market news: {e}")
             return None
 
-    # Symbols used to compute market movers; covers major large-cap equities.
+    # Fallback symbols if S&P 500 constituents are temporarily unavailable.
     _MOVER_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'META', 'GOOGL']
 
-    def get_market_movers(self, side: str = 'gainers', count: int = 3) -> Optional[List[Dict]]:
-        """Compute market movers from a basket of major symbols.
+    def _get_sp500_symbols(self) -> List[str]:
+        """Get a cached S&P 500 symbol universe for market movers."""
+        cached_symbols = getattr(self, '_cached_sp500_symbols', None)
+        cached_at = getattr(self, '_cached_sp500_symbols_at', None)
 
-        Fetches quotes for a predefined set of large-cap symbols, computes
+        if (
+            cached_symbols
+            and cached_at
+            and datetime.now(timezone.utc) - cached_at < self._UNIVERSE_CACHE_TTL
+        ):
+            return list(cached_symbols)
+
+        try:
+            data = self.client.indices_const(symbol=self._SP500_INDEX_SYMBOL)
+            constituents = data.get('constituents') if isinstance(data, dict) else None
+            symbols = []
+            for item in constituents or []:
+                if isinstance(item, dict):
+                    symbol = item.get('symbol') or item.get('ticker')
+                else:
+                    symbol = item
+                if symbol:
+                    symbols.append(str(symbol).upper())
+
+            if symbols:
+                self._cached_sp500_symbols = list(dict.fromkeys(symbols))
+                self._cached_sp500_symbols_at = datetime.now(timezone.utc)
+                return list(self._cached_sp500_symbols)
+        except Exception as e:
+            self.logger.error(f"Error fetching S&P 500 constituents: {e}")
+
+        return list(self._MOVER_SYMBOLS)
+
+    def get_market_movers(self, side: str = 'gainers', count: int = 3) -> Optional[List[Dict]]:
+        """Compute market movers from the S&P 500 universe when available.
+
+        Fetches quotes for S&P 500 constituents, computes
         percentage change versus previous close, and returns the top movers.
 
         Args:
@@ -215,7 +255,7 @@ class FinnhubClient:
         """
         try:
             candidates = []
-            for sym in self._MOVER_SYMBOLS:
+            for sym in self._get_sp500_symbols():
                 quote = self.get_quote(sym)
                 if (
                     quote
@@ -247,4 +287,54 @@ class FinnhubClient:
             return candidates[:count]
         except Exception as e:
             self.logger.error(f"Error computing market movers (side={side}): {e}")
+            return None
+
+    def get_market_summary(self) -> Optional[List[str]]:
+        """Build a brief spoken market recap from index quotes and top news."""
+        try:
+            moves = []
+            for symbol, label in self._MARKET_INDEXES:
+                quote = self.get_quote(symbol)
+                if (
+                    quote
+                    and quote.get('current_price')
+                    and quote.get('previous_close')
+                    and quote['previous_close'] != 0
+                ):
+                    pct_change = (
+                        (quote['current_price'] - quote['previous_close'])
+                        / quote['previous_close']
+                        * 100
+                    )
+                    moves.append({'label': label, 'pct_change': pct_change})
+
+            headlines = self.get_market_news() or []
+            lines = []
+
+            if moves:
+                positive = sum(1 for move in moves if move['pct_change'] > 0.1)
+                negative = sum(1 for move in moves if move['pct_change'] < -0.1)
+                if positive > negative:
+                    lines.append("Stocks are trading higher today.")
+                elif negative > positive:
+                    lines.append("Stocks are trading lower today.")
+                else:
+                    lines.append("Markets are mixed today.")
+
+                for move in moves:
+                    direction = "up" if move['pct_change'] >= 0 else "down"
+                    lines.append(
+                        f"The {move['label']} is {direction} {abs(move['pct_change']):.2f} percent."
+                    )
+
+            top_headline = next(
+                (item.get('headline', '').strip() for item in headlines if item.get('headline', '').strip()),
+                '',
+            )
+            if top_headline:
+                lines.append(f"Top story: {top_headline}.")
+
+            return lines or None
+        except Exception as e:
+            self.logger.error(f"Error building market summary: {e}")
             return None
