@@ -408,11 +408,12 @@ class TestVoiceHandlerMarketRecap:
     """Tests for the /call/market-recap route."""
 
     def test_market_recap_success(self):
-        """Finnhub returns news; response should include headlines."""
+        """Finnhub returns a spoken summary; response should include recap details."""
         fh = Mock(spec=FinnhubClient)
-        fh.get_market_news.return_value = [
-            {'headline': 'Fed holds rates steady'},
-            {'headline': 'S&P 500 hits record high'},
+        fh.get_market_summary.return_value = [
+            'Stocks are trading higher today.',
+            'The S and P 500 is up 1.10 percent.',
+            'Top story: Fed holds rates steady.',
         ]
         vh = _make_voice_handler(fh)
         client = vh.app.test_client()
@@ -421,13 +422,14 @@ class TestVoiceHandlerMarketRecap:
         body = resp.data.decode()
 
         assert resp.status_code == 200
+        assert 'Stocks are trading higher today.' in body
         assert 'Fed holds rates steady' in body
         assert 'recap' in body.lower()
 
-    def test_market_recap_no_news(self):
-        """No news returned; should say unavailable."""
+    def test_market_recap_no_summary(self):
+        """No summary returned; should say unavailable."""
         fh = Mock(spec=FinnhubClient)
-        fh.get_market_news.return_value = []
+        fh.get_market_summary.return_value = []
         vh = _make_voice_handler(fh)
         client = vh.app.test_client()
 
@@ -453,7 +455,7 @@ class TestVoiceHandlerMarketRecap:
     def test_market_recap_exception(self):
         """Finnhub raises exception; should return error message."""
         fh = Mock(spec=FinnhubClient)
-        fh.get_market_news.side_effect = Exception("timeout")
+        fh.get_market_summary.side_effect = Exception("timeout")
         vh = _make_voice_handler(fh)
         client = vh.app.test_client()
 
@@ -580,13 +582,9 @@ class TestFinnhubClientMethods:
             return None
 
         fh_client.get_quote = fake_get_quote
-        # Patch the class-level symbol list to only use our test symbols
-        original = fh_client._MOVER_SYMBOLS
-        fh_client.__class__._MOVER_SYMBOLS = list(quote_data.keys())
+        fh_client._get_sp500_symbols = Mock(return_value=list(quote_data.keys()))
 
         result = fh_client.get_market_movers('gainers', count=3)
-
-        fh_client.__class__._MOVER_SYMBOLS = original
 
         assert result is not None
         assert result[0]['symbol'] == 'NVDA'   # highest gainer
@@ -607,20 +605,48 @@ class TestFinnhubClientMethods:
             return None
 
         fh_client.get_quote = fake_get_quote
-        fh_client.__class__._MOVER_SYMBOLS = list(quote_data.keys())
+        fh_client._get_sp500_symbols = Mock(return_value=list(quote_data.keys()))
 
         result = fh_client.get_market_movers('losers', count=2)
-        fh_client.__class__._MOVER_SYMBOLS = FinnhubClient._MOVER_SYMBOLS
 
         assert result[0]['symbol'] == 'META'   # biggest loser first
 
     def test_get_market_movers_no_quotes(self, fh_client):
         """All get_quote calls return None; result should be None."""
         fh_client.get_quote = Mock(return_value=None)
-        fh_client.__class__._MOVER_SYMBOLS = ['AAPL']
+        fh_client._get_sp500_symbols = Mock(return_value=['AAPL'])
 
         result = fh_client.get_market_movers('gainers')
-        fh_client.__class__._MOVER_SYMBOLS = FinnhubClient._MOVER_SYMBOLS
 
         assert result is None
 
+    def test_get_sp500_symbols_success(self, fh_client, mock_raw_client):
+        mock_raw_client.indices_const.return_value = {
+            'constituents': [{'symbol': 'AAPL'}, {'symbol': 'MSFT'}, {'symbol': 'NVDA'}]
+        }
+
+        result = fh_client._get_sp500_symbols()
+
+        assert result == ['AAPL', 'MSFT', 'NVDA']
+        mock_raw_client.indices_const.assert_called_once_with(symbol='^GSPC')
+
+    def test_get_market_summary_success(self, fh_client):
+        quote_data = {
+            'SPY': {'current_price': 510.0, 'previous_close': 500.0},
+            'QQQ': {'current_price': 440.0, 'previous_close': 445.0},
+            'DIA': {'current_price': 390.0, 'previous_close': 388.0},
+        }
+
+        def fake_get_quote(sym):
+            data = quote_data.get(sym)
+            return {'symbol': sym, **data} if data else None
+
+        fh_client.get_quote = fake_get_quote
+        fh_client.get_market_news = Mock(return_value=[{'headline': 'Fed holds rates steady'}])
+
+        result = fh_client.get_market_summary()
+
+        assert result is not None
+        assert 'today' in result[0].lower()
+        assert any('S and P 500' in line for line in result)
+        assert any('Fed holds rates steady' in line for line in result)
