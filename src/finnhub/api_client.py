@@ -214,9 +214,11 @@ class FinnhubClient:
         if (
             cached_symbols
             and cached_at
-            and datetime.now(timezone.utc) - cached_at < self._UNIVERSE_CACHE_TTL
         ):
-            return list(cached_symbols)
+            if cached_at.tzinfo is None:
+                cached_at = cached_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) - cached_at < self._UNIVERSE_CACHE_TTL:
+                return list(cached_symbols)
 
         try:
             data = self.client.indices_const(symbol=self._SP500_INDEX_SYMBOL)
