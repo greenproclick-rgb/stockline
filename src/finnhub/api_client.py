@@ -327,10 +327,12 @@ class FinnhubClient:
                         f"The {move['label']} is {direction} {abs(move['pct_change']):.2f} percent."
                     )
 
-            top_headline = next(
-                (item.get('headline', '').strip() for item in headlines if item.get('headline', '').strip()),
-                '',
-            )
+            top_headline = ''
+            for item in headlines:
+                headline = item.get('headline', '').strip()
+                if headline:
+                    top_headline = headline
+                    break
             if top_headline:
                 lines.append(f"Top story: {top_headline}.")
 

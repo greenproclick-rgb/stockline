@@ -622,7 +622,7 @@ class TestFinnhubClientMethods:
 
     def test_get_sp500_symbols_success(self, fh_client, mock_raw_client):
         mock_raw_client.indices_const.return_value = {
-            'constituents': [{'symbol': 'AAPL'}, {'symbol': 'MSFT'}, 'NVDA']
+            'constituents': [{'symbol': 'AAPL'}, {'symbol': 'MSFT'}, {'symbol': 'NVDA'}]
         }
 
         result = fh_client._get_sp500_symbols()
