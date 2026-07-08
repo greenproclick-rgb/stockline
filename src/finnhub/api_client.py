@@ -1,250 +1,198 @@
-"""
-Finnhub API client for retrieving stock data.
-"""
+import logging
+import time
+from datetime import date, timedelta
+from typing import Dict, List, Optional
 
 import finnhub
-import logging
-from typing import Dict, Optional, List
-from datetime import datetime, timedelta, date
 
-logger = logging.getLogger(__name__)
 
 class FinnhubClient:
-    """Client for interacting with Finnhub API."""
-    
+    """Wrapper around finnhub-python with app-specific helpers."""
+
+    # Fallback list only (used if dynamic universe fetch fails)
+    _MOVER_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL"]
+
+    # In-memory cache for US symbols with market cap > $500M
+    _US_500M_UNIVERSE_CACHE: Dict[str, object] = {"symbols": None, "expires_at": 0}
+
     def __init__(self, api_key: str):
-        """Initialize Finnhub client.
-        
-        Args:
-            api_key: Finnhub API key
-        """
+        self.logger = logging.getLogger(__name__)
         self.client = finnhub.Client(api_key=api_key)
-        self.logger = logger
-    
+
     def get_quote(self, symbol: str) -> Optional[Dict]:
-        """Get real-time stock quote.
-        
-        Args:
-            symbol: Stock symbol (e.g., 'AAPL')
-            
-        Returns:
-            Dictionary with stock quote data or None if error
-        """
+        """Get real-time quote for a stock symbol."""
         try:
-            quote = self.client.quote(symbol)
+            q = self.client.quote(symbol)
+            if not q:
+                return None
             return {
-                'symbol': symbol,
-                'current_price': quote.get('c'),
-                'high': quote.get('h'),
-                'low': quote.get('l'),
-                'open': quote.get('o'),
-                'previous_close': quote.get('pc'),
-                'timestamp': datetime.fromtimestamp(quote.get('t', 0))
+                "symbol": symbol,
+                "current_price": q.get("c"),
+                "high": q.get("h"),
+                "low": q.get("l"),
+                "open": q.get("o"),
+                "previous_close": q.get("pc"),
+                "timestamp": q.get("t"),
             }
         except Exception as e:
             self.logger.error(f"Error fetching quote for {symbol}: {e}")
             return None
-    
-    def get_company_profile(self, symbol: str) -> Optional[Dict]:
-        """Get company profile information.
-        
-        Args:
-            symbol: Stock symbol
-            
-        Returns:
-            Dictionary with company information or None if error
-        """
-        try:
-            profile = self.client.company_profile2(symbol=symbol)
-            return {
-                'symbol': symbol,
-                'name': profile.get('name'),
-                'industry': profile.get('finnhubIndustry'),
-                'country': profile.get('country'),
-                'website': profile.get('weburl')
-            }
-        except Exception as e:
-            self.logger.error(f"Error fetching profile for {symbol}: {e}")
-            return None
-    
-    def get_price_target(self, symbol: str) -> Optional[Dict]:
-        """Get price target analysis.
-        
-        Args:
-            symbol: Stock symbol
-            
-        Returns:
-            Dictionary with price target data
-        """
-        try:
-            target = self.client.price_target(symbol=symbol)
-            return {
-                'symbol': symbol,
-                'target_price': target.get('targetPrice'),
-                'last_update': target.get('lastUpdated')
-            }
-        except Exception as e:
-            self.logger.error(f"Error fetching price target for {symbol}: {e}")
-            return None
-    
-    def search_symbol(self, query: str) -> Optional[List[Dict]]:
-        """Search for stock symbols.
-        
-        Args:
-            query: Search query (company name or symbol)
-            
-        Returns:
-            List of matching symbols or None if error
-        """
-        try:
-            results = self.client.symbol_lookup(query=query)
-            return results.get('result', [])[:5]  # Return top 5 results
-        except Exception as e:
-            self.logger.error(f"Error searching symbols for '{query}': {e}")
-            return None
 
     def get_basic_financials(self, symbol: str) -> Optional[Dict]:
-        """Get basic financial metrics for a symbol.
-
-        Args:
-            symbol: Stock symbol (e.g., 'AAPL')
-
-        Returns:
-            Dictionary with 52-week range, P/E ratio, beta, etc., or None if error
-        """
+        """Get basic financial metrics."""
         try:
-            data = self.client.company_basic_financials(symbol, 'all')
-            metric = data.get('metric', {})
+            data = self.client.company_basic_financials(symbol, "all")
+            metric = (data or {}).get("metric", {})
             return {
-                'symbol': symbol,
-                '52_week_high': metric.get('52WeekHigh'),
-                '52_week_low': metric.get('52WeekLow'),
-                'pe_ratio': metric.get('peBasicExclExtraTTM') or metric.get('peTTM'),
-                'beta': metric.get('beta'),
-                'market_cap': metric.get('marketCapitalization'),
+                "symbol": symbol,
+                "52_week_high": metric.get("52WeekHigh"),
+                "52_week_low": metric.get("52WeekLow"),
+                "pe_ratio": metric.get("peTTM"),
+                "beta": metric.get("beta"),
             }
         except Exception as e:
             self.logger.error(f"Error fetching basic financials for {symbol}: {e}")
             return None
 
-    def get_recommendation_trends(self, symbol: str) -> Optional[Dict]:
-        """Get analyst recommendation trends for a symbol.
-
-        Args:
-            symbol: Stock symbol
-
-        Returns:
-            Dictionary with buy/hold/sell counts, or None if error
-        """
+    def get_price_target(self, symbol: str) -> Optional[Dict]:
+        """Get analyst average price target."""
         try:
-            trends = self.client.recommendation_trends(symbol)
-            if trends:
-                latest = trends[0]
-                return {
-                    'symbol': symbol,
-                    'buy': latest.get('buy', 0),
-                    'hold': latest.get('hold', 0),
-                    'sell': latest.get('sell', 0),
-                    'strong_buy': latest.get('strongBuy', 0),
-                    'strong_sell': latest.get('strongSell', 0),
-                    'period': latest.get('period'),
-                }
+            data = self.client.price_target(symbol)
+            if not data:
+                return None
+            return {"symbol": symbol, "target_price": data.get("targetMean")}
+        except Exception as e:
+            self.logger.error(f"Error fetching price target for {symbol}: {e}")
             return None
+
+    def get_recommendation_trends(self, symbol: str) -> Optional[Dict]:
+        """Get recommendation trends from analysts."""
+        try:
+            data = self.client.recommendation_trends(symbol) or []
+            if not data:
+                return None
+            latest = data[0]
+            return {
+                "symbol": symbol,
+                "buy": latest.get("buy", 0),
+                "strong_buy": latest.get("strongBuy", 0),
+                "hold": latest.get("hold", 0),
+                "sell": latest.get("sell", 0),
+                "strong_sell": latest.get("strongSell", 0),
+            }
         except Exception as e:
             self.logger.error(f"Error fetching recommendation trends for {symbol}: {e}")
             return None
 
     def get_company_news(self, symbol: str, days_back: int = 7) -> Optional[List[Dict]]:
-        """Get recent company news articles.
-
-        Args:
-            symbol: Stock symbol
-            days_back: Number of days back to search for news
-
-        Returns:
-            List of news items with headline and summary, or None if error
-        """
+        """Get recent company news."""
         try:
             to_date = date.today()
             from_date = to_date - timedelta(days=days_back)
             news = self.client.company_news(
                 symbol,
-                _from=from_date.strftime('%Y-%m-%d'),
-                to=to_date.strftime('%Y-%m-%d'),
+                _from=from_date.strftime("%Y-%m-%d"),
+                to=to_date.strftime("%Y-%m-%d"),
             )
             return [
-                {'headline': item.get('headline', ''), 'summary': item.get('summary', '')}
+                {"headline": item.get("headline", ""), "summary": item.get("summary", "")}
                 for item in (news or [])[:5]
             ]
         except Exception as e:
             self.logger.error(f"Error fetching company news for {symbol}: {e}")
             return None
 
-    def get_market_news(self, category: str = 'general') -> Optional[List[Dict]]:
-        """Get general market news headlines.
-
-        Args:
-            category: News category (e.g., 'general', 'forex', 'crypto')
-
-        Returns:
-            List of news items with headline, or None if error
-        """
+    def get_market_news(self, category: str = "general") -> Optional[List[Dict]]:
+        """Get general market news headlines."""
         try:
             news = self.client.general_news(category, min_id=0)
-            return [{'headline': item.get('headline', '')} for item in (news or [])[:5]]
+            return [{"headline": item.get("headline", "")} for item in (news or [])[:5]]
         except Exception as e:
             self.logger.error(f"Error fetching market news: {e}")
             return None
 
-    # Symbols used to compute market movers; covers major large-cap equities.
-    _MOVER_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'META', 'GOOGL']
+    def _get_us_symbols_over_500m(self, ttl_seconds: int = 3600) -> List[str]:
+        """
+        Build universe: US-listed stocks with market cap > $500M.
+        Finnhub company_profile2.marketCapitalization is in millions.
+        """
+        now = time.time()
+        cached_symbols = self._US_500M_UNIVERSE_CACHE.get("symbols")
+        expires_at = self._US_500M_UNIVERSE_CACHE.get("expires_at", 0)
 
-    def get_market_movers(self, side: str = 'gainers', count: int = 3) -> Optional[List[Dict]]:
-        """Compute market movers from a basket of major symbols.
+        if cached_symbols and now < expires_at:
+            return cached_symbols  # type: ignore[return-value]
 
-        Fetches quotes for a predefined set of large-cap symbols, computes
-        percentage change versus previous close, and returns the top movers.
+        symbols: List[str] = []
+        try:
+            all_us = self.client.stock_symbols("US") or []
 
-        Args:
-            side: 'gainers' (highest % gain), 'losers' (biggest % loss),
-                  or 'actives' (largest absolute % move)
-            count: Maximum number of results to return
+            for row in all_us:
+                sym = (row or {}).get("symbol")
+                if not sym:
+                    continue
+                # Optional quick skip to avoid many non-standard tickers
+                if "." in sym:
+                    continue
 
-        Returns:
-            List of dicts with 'symbol', 'pct_change', and 'price', or None if error
+                try:
+                    profile = self.client.company_profile2(symbol=sym) or {}
+                    market_cap_m = profile.get("marketCapitalization")
+                    if market_cap_m is not None and float(market_cap_m) > 500:
+                        symbols.append(sym)
+                except Exception:
+                    continue
+
+            self._US_500M_UNIVERSE_CACHE["symbols"] = symbols
+            self._US_500M_UNIVERSE_CACHE["expires_at"] = now + ttl_seconds
+            return symbols
+        except Exception as e:
+            self.logger.error(f"Error building US >500M universe: {e}")
+            return []
+
+    def get_market_movers(self, side: str = "gainers", count: int = 3) -> Optional[List[Dict]]:
+        """
+        Compute market movers from US-listed symbols with market cap > $500M.
+        Fallback to _MOVER_SYMBOLS if universe fetch fails.
         """
         try:
+            universe = self._get_us_symbols_over_500m()
+            if not universe:
+                universe = self._MOVER_SYMBOLS
+
             candidates = []
-            for sym in self._MOVER_SYMBOLS:
+            for sym in universe:
                 quote = self.get_quote(sym)
                 if (
                     quote
-                    and quote.get('current_price')
-                    and quote.get('previous_close')
-                    and quote['previous_close'] != 0
+                    and quote.get("current_price")
+                    and quote.get("previous_close")
+                    and quote["previous_close"] != 0
                 ):
                     pct = (
-                        (quote['current_price'] - quote['previous_close'])
-                        / quote['previous_close']
+                        (quote["current_price"] - quote["previous_close"])
+                        / quote["previous_close"]
                         * 100
                     )
-                    candidates.append({
-                        'symbol': sym,
-                        'pct_change': pct,
-                        'price': quote['current_price'],
-                    })
+                    candidates.append(
+                        {
+                            "symbol": sym,
+                            "pct_change": pct,
+                            "price": quote["current_price"],
+                        }
+                    )
 
             if not candidates:
                 return None
 
-            if side == 'gainers':
-                candidates.sort(key=lambda x: x['pct_change'], reverse=True)
-            elif side == 'losers':
-                candidates.sort(key=lambda x: x['pct_change'])
+            if side == "gainers":
+                candidates.sort(key=lambda x: x["pct_change"], reverse=True)
+            elif side == "losers":
+                candidates.sort(key=lambda x: x["pct_change"])
             else:
-                candidates.sort(key=lambda x: abs(x['pct_change']), reverse=True)
+                candidates.sort(key=lambda x: abs(x["pct_change"]), reverse=True)
 
             return candidates[:count]
         except Exception as e:
-            self.logger.error(f"Error computing market movers (side={side}): {e}")
+            self.logger.error(f"Error fetching market movers: {e}")
             return None
