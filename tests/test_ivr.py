@@ -373,6 +373,34 @@ class TestVoiceHandlerMovers:
         assert resp.status_code == 200
         fh.get_market_movers.assert_called_once_with('actives')
 
+    def test_movers_invalid_digit(self):
+        """Invalid digit should not call Finnhub and should return to main menu."""
+        fh = Mock(spec=FinnhubClient)
+        vh = _make_voice_handler(fh)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': '9'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        fh.get_market_movers.assert_not_called()
+        assert 'invalid selection' in body.lower()
+        assert '/call/incoming' in body
+
+    def test_movers_empty_digit(self):
+        """Empty digit should be treated as invalid selection."""
+        fh = Mock(spec=FinnhubClient)
+        vh = _make_voice_handler(fh)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': ''})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        fh.get_market_movers.assert_not_called()
+        assert 'invalid selection' in body.lower()
+        assert '/call/incoming' in body
+
     def test_movers_no_data(self):
         """Finnhub returns None; should say unavailable."""
         fh = Mock(spec=FinnhubClient)
@@ -385,6 +413,42 @@ class TestVoiceHandlerMovers:
 
         assert resp.status_code == 200
         assert 'unavailable' in body.lower()
+        assert '/call/incoming' in body
+
+    def test_movers_empty_payload(self):
+        """Finnhub returns empty list; should say unavailable."""
+        fh = Mock(spec=FinnhubClient)
+        fh.get_market_movers.return_value = []
+        vh = _make_voice_handler(fh)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': '1'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert 'unavailable' in body.lower()
+        assert '/call/incoming' in body
+
+    def test_movers_malformed_payload_rows(self):
+        """Malformed mover rows should be skipped without raising errors."""
+        fh = Mock(spec=FinnhubClient)
+        fh.get_market_movers.return_value = [
+            None,
+            {'symbol': 'AAPL'},
+            {'symbol': 'TSLA', 'pct_change': 'not-a-number'},
+            {'pct_change': 2.0},
+            {'symbol': 'MSFT', 'pct_change': '1.5'},
+        ]
+        vh = _make_voice_handler(fh)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': '1'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert 'MSFT' in body
+        assert 'AAPL' not in body
+        assert '/call/incoming' in body
 
     def test_movers_no_client(self):
         """No Finnhub client; should say unavailable."""
@@ -623,4 +687,3 @@ class TestFinnhubClientMethods:
         fh_client.__class__._MOVER_SYMBOLS = FinnhubClient._MOVER_SYMBOLS
 
         assert result is None
-
