@@ -4,7 +4,10 @@ Unit tests for IVR system.
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
+from flask import Flask
+from src.api.endpoints import APIEndpoints
 from src.ivr.call_manager import CallManager
+from src.ivr.mvp_services import InMemoryCollectionStore
 from src.ivr.voice_handler import VoiceHandler
 from src.finnhub.api_client import FinnhubClient
 
@@ -77,6 +80,8 @@ class TestVoiceHandlerQuote:
         assert resp.status_code == 200
         assert '175.50' in body
         assert 'AAPL' in body
+        assert 'up' in body.lower()
+        assert 'trend' in body.lower()
         # Submenu gather should be present
         assert 'quote-options' in body
 
@@ -177,6 +182,30 @@ class TestVoiceHandlerQuoteOptions:
         assert 'stock-analysis' in body
         assert 'MSFT' in body
 
+    def test_digit_3_redirects_to_historical_menu(self):
+        """Pressing 3 should redirect to /call/historical-menu."""
+        vh = _make_voice_handler()
+        client = vh.app.test_client()
+
+        resp = client.post('/call/quote-options?symbol=MSFT', data={'Digits': '3'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert 'historical-menu' in body
+        assert 'MSFT' in body
+
+    def test_digit_4_redirects_to_earnings(self):
+        """Pressing 4 should redirect to /call/earnings."""
+        vh = _make_voice_handler()
+        client = vh.app.test_client()
+
+        resp = client.post('/call/quote-options?symbol=MSFT', data={'Digits': '4'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert 'earnings' in body
+        assert 'MSFT' in body
+
     def test_star_redirects_to_incoming(self):
         """Pressing * (or any other digit) should redirect to /call/incoming."""
         vh = _make_voice_handler()
@@ -222,6 +251,13 @@ class TestVoiceHandlerStockInfo:
             'sell': 2,
             'strong_sell': 1,
         }
+        fh.get_rsi.return_value = {'symbol': 'AAPL', 'value': 58.2}
+        fh.get_earnings.return_value = {
+            'symbol': 'AAPL',
+            'date': '2026-08-15',
+            'eps_actual': 1.55,
+            'eps_estimate': 1.45,
+        }
         vh = _make_voice_handler(fh)
         client = vh.app.test_client()
 
@@ -236,6 +272,8 @@ class TestVoiceHandlerStockInfo:
         assert '28.50' in body             # P/E ratio
         assert '210.00' in body            # price target
         assert '25' in body or 'buy' in body.lower()  # buy count (15+10=25)
+        assert '58.20' in body            # RSI
+        assert '2026-08-15' in body       # earnings date
 
     def test_stock_info_no_data(self):
         """Finnhub returns nothing; should say could not retrieve info."""
@@ -244,6 +282,8 @@ class TestVoiceHandlerStockInfo:
         fh.get_basic_financials.return_value = None
         fh.get_price_target.return_value = None
         fh.get_recommendation_trends.return_value = None
+        fh.get_rsi.return_value = None
+        fh.get_earnings.return_value = None
         vh = _make_voice_handler(fh)
         client = vh.app.test_client()
 
@@ -288,6 +328,7 @@ class TestVoiceHandlerStockAnalysis:
         assert resp.status_code == 200
         assert 'AAPL' in body
         assert 'Apple hits all-time high' in body
+        assert 'article-options' in body
 
     def test_stock_analysis_no_news(self):
         """No news found; should say no recent analysis."""
@@ -312,6 +353,88 @@ class TestVoiceHandlerStockAnalysis:
 
         assert resp.status_code == 200
         assert 'sorry' in body.lower() or 'could not' in body.lower()
+
+
+# ---------------------------------------------------------------------------
+# VoiceHandler — historical performance and earnings
+# ---------------------------------------------------------------------------
+
+class TestVoiceHandlerHistoricalPerformance:
+    """Tests for the new historical and earnings routes."""
+
+    def test_historical_menu_prompt(self):
+        vh = _make_voice_handler()
+        client = vh.app.test_client()
+
+        resp = client.post('/call/historical-menu?symbol=AAPL')
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert 'last week' in body.lower()
+        assert 'historical-performance' in body
+
+    def test_historical_performance_week(self):
+        fh = Mock(spec=FinnhubClient)
+        fh.get_historical_change.return_value = {
+            'symbol': 'AAPL',
+            'period': 'week',
+            'change': 5.25,
+            'change_percent': 3.10,
+        }
+        vh = _make_voice_handler(fh)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/historical-performance?symbol=AAPL', data={'Digits': '1'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        fh.get_historical_change.assert_called_once_with('AAPL', 'week')
+        assert 'last week' in body.lower()
+        assert '3.10' in body
+        assert 'up' in body.lower()
+
+    def test_earnings_route(self):
+        fh = Mock(spec=FinnhubClient)
+        fh.get_earnings.return_value = {
+            'symbol': 'AAPL',
+            'date': '2026-08-15',
+            'eps_actual': 1.55,
+            'eps_estimate': 1.45,
+        }
+        vh = _make_voice_handler(fh)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/earnings?symbol=AAPL')
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert '2026-08-15' in body
+        assert 'estimate' in body.lower()
+
+
+# ---------------------------------------------------------------------------
+# VoiceHandler — headline playback foundation
+# ---------------------------------------------------------------------------
+
+class TestVoiceHandlerHeadlinePlayback:
+    """Tests for headline drill-down foundation routes."""
+
+    def test_article_playback_reads_summary_and_controls(self):
+        fh = Mock(spec=FinnhubClient)
+        fh.get_company_news.return_value = [
+            {'headline': 'Apple launches new device', 'summary': 'A concise story summary.'},
+        ]
+        vh = _make_voice_handler(fh)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/article-playback?scope=stock&symbol=AAPL')
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert 'Apple launches new device' in body
+        assert 'A concise story summary' in body
+        assert 'pause' in body.lower()
+        assert 'rewind' in body.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -624,3 +747,121 @@ class TestFinnhubClientMethods:
 
         assert result is None
 
+    def test_get_historical_change_success(self, fh_client, mock_raw_client):
+        mock_raw_client.stock_candles.return_value = {
+            's': 'ok',
+            'c': [100.0, 104.0, 106.0],
+        }
+
+        result = fh_client.get_historical_change('AAPL', 'week')
+
+        assert result['symbol'] == 'AAPL'
+        assert result['change'] == 6.0
+        assert round(result['change_percent'], 2) == 6.00
+
+    def test_get_historical_change_invalid_period(self, fh_client):
+        assert fh_client.get_historical_change('AAPL', 'year') is None
+
+    def test_get_rsi_success(self, fh_client, mock_raw_client):
+        mock_raw_client.technical_indicator.return_value = {'rsi': [51.1, 57.8]}
+
+        result = fh_client.get_rsi('AAPL')
+
+        assert result == {'symbol': 'AAPL', 'value': 57.8}
+
+    def test_get_earnings_from_calendar(self, fh_client, mock_raw_client):
+        mock_raw_client.earnings_calendar.return_value = {
+            'earningsCalendar': [
+                {
+                    'date': '2026-08-15',
+                    'epsActual': 1.55,
+                    'epsEstimate': 1.45,
+                }
+            ]
+        }
+
+        result = fh_client.get_earnings('AAPL')
+
+        assert result['date'] == '2026-08-15'
+        assert result['eps_actual'] == 1.55
+        assert result['eps_estimate'] == 1.45
+
+
+# ---------------------------------------------------------------------------
+# InMemoryCollectionStore and API foundations
+# ---------------------------------------------------------------------------
+
+class TestInMemoryCollectionStore:
+    """Tests for watchlist and portfolio foundation."""
+
+    def test_create_add_remove_and_list_symbols(self):
+        store = InMemoryCollectionStore()
+
+        created = store.create_collection('watchlist', 'Core Ideas')
+        assert created['name'] == 'Core Ideas'
+        assert created['symbols'] == []
+
+        updated = store.add_symbol('watchlist', 'Core Ideas', 'aapl')
+        assert updated['symbols'] == ['AAPL']
+
+        store.add_symbol('watchlist', 'Core Ideas', 'MSFT')
+        assert store.list_symbols('watchlist', 'Core Ideas') == ['AAPL', 'MSFT']
+
+        reduced = store.remove_symbol('watchlist', 'Core Ideas', 'AAPL')
+        assert reduced['symbols'] == ['MSFT']
+
+
+class TestAPIEndpointsMVP:
+    """Tests for new API foundations used by the MVP."""
+
+    @pytest.fixture
+    def api_client(self):
+        app = Flask(__name__)
+        app.config['TESTING'] = True
+        settings = Mock()
+        settings.environment = 'test'
+        fh = Mock(spec=FinnhubClient)
+        fh.get_company_news.return_value = [
+            {'headline': 'Apple launches new device', 'summary': 'A concise story summary.'},
+        ]
+        fh.get_market_news.return_value = [
+            {'headline': 'Indexes rise', 'summary': 'Markets moved higher.'},
+        ]
+        fh.get_historical_change.return_value = {
+            'symbol': 'AAPL',
+            'period': 'week',
+            'change': 2.0,
+            'change_percent': 1.5,
+        }
+        fh.get_earnings.return_value = {
+            'symbol': 'AAPL',
+            'date': '2026-08-15',
+        }
+        APIEndpoints(app, fh, settings)
+        return app.test_client()
+
+    def test_collection_endpoints(self, api_client):
+        create_resp = api_client.post('/api/collections/watchlist/core')
+        add_resp = api_client.post('/api/collections/watchlist/core/symbols', json={'symbol': 'AAPL'})
+        get_resp = api_client.get('/api/collections/watchlist/core')
+
+        assert create_resp.status_code == 201
+        assert add_resp.status_code == 200
+        assert get_resp.status_code == 200
+        assert get_resp.get_json()['data']['symbols'] == ['AAPL']
+
+    def test_article_foundation_endpoint(self, api_client):
+        resp = api_client.get('/api/news/article?scope=stock&symbol=AAPL&index=0')
+        body = resp.get_json()
+
+        assert resp.status_code == 200
+        assert body['article']['headline'] == 'Apple launches new device'
+        assert 'pause' in body['playback_controls']
+
+    def test_historical_voice_summary_endpoint(self, api_client):
+        resp = api_client.get('/api/history/AAPL/week')
+        body = resp.get_json()
+
+        assert resp.status_code == 200
+        assert body['success'] is True
+        assert 'last week' in body['voice_text'].lower()

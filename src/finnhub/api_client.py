@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Dict, List, Optional
 
 import finnhub
@@ -47,7 +47,7 @@ class FinnhubClient:
                 "symbol": symbol,
                 "52_week_high": metric.get("52WeekHigh"),
                 "52_week_low": metric.get("52WeekLow"),
-                "pe_ratio": metric.get("peTTM"),
+                "pe_ratio": metric.get("peTTM") or metric.get("peBasicExclExtraTTM"),
                 "beta": metric.get("beta"),
             }
         except Exception as e:
@@ -79,6 +79,7 @@ class FinnhubClient:
                 "hold": latest.get("hold", 0),
                 "sell": latest.get("sell", 0),
                 "strong_sell": latest.get("strongSell", 0),
+                "period": latest.get("period"),
             }
         except Exception as e:
             self.logger.error(f"Error fetching recommendation trends for {symbol}: {e}")
@@ -95,7 +96,12 @@ class FinnhubClient:
                 to=to_date.strftime("%Y-%m-%d"),
             )
             return [
-                {"headline": item.get("headline", ""), "summary": item.get("summary", "")}
+                {
+                    "headline": item.get("headline", ""),
+                    "summary": item.get("summary", ""),
+                    "source": item.get("source", ""),
+                    "url": item.get("url", ""),
+                }
                 for item in (news or [])[:5]
             ]
         except Exception as e:
@@ -106,10 +112,140 @@ class FinnhubClient:
         """Get general market news headlines."""
         try:
             news = self.client.general_news(category, min_id=0)
-            return [{"headline": item.get("headline", "")} for item in (news or [])[:5]]
+            return [
+                {
+                    "headline": item.get("headline", ""),
+                    "summary": item.get("summary", ""),
+                    "source": item.get("source", ""),
+                    "url": item.get("url", ""),
+                }
+                for item in (news or [])[:5]
+            ]
         except Exception as e:
             self.logger.error(f"Error fetching market news: {e}")
             return None
+
+    def get_historical_change(self, symbol: str, period: str) -> Optional[Dict]:
+        """Get a minimal price-change summary for a named historical period."""
+        period_days = {
+            "week": 7,
+            "month": 30,
+            "quarter": 90,
+        }
+
+        days = period_days.get((period or "").lower())
+        if not days:
+            return None
+
+        try:
+            end_at = int(time.time())
+            start_at = int((datetime.now(UTC) - timedelta(days=days)).timestamp())
+            candles = self.client.stock_candles(symbol, "D", start_at, end_at)
+            closes = (candles or {}).get("c") or []
+            status = (candles or {}).get("s")
+
+            if status != "ok" or len(closes) < 2:
+                return None
+
+            start_price = closes[0]
+            end_price = closes[-1]
+            if start_price in (None, 0) or end_price is None:
+                return None
+
+            change = end_price - start_price
+            change_percent = (change / start_price) * 100
+            return {
+                "symbol": symbol,
+                "period": period,
+                "start_price": start_price,
+                "end_price": end_price,
+                "change": change,
+                "change_percent": change_percent,
+            }
+        except Exception as e:
+            self.logger.error(f"Error fetching historical change for {symbol}: {e}")
+            return None
+
+    def get_rsi(self, symbol: str) -> Optional[Dict]:
+        """Get the latest RSI value when supported by the API client."""
+        indicator_method = getattr(self.client, "technical_indicator", None)
+        if not callable(indicator_method):
+            return None
+
+        end_at = int(time.time())
+        start_at = int((datetime.now(UTC) - timedelta(days=30)).timestamp())
+
+        try:
+            try:
+                data = indicator_method(symbol, "D", start_at, end_at, "rsi", {"timeperiod": 14})
+            except TypeError:
+                data = indicator_method(
+                    symbol=symbol,
+                    resolution="D",
+                    _from=start_at,
+                    to=end_at,
+                    indicator="rsi",
+                    indicator_fields={"timeperiod": 14},
+                )
+
+            values = (data or {}).get("rsi") or []
+            if not values:
+                return None
+            return {"symbol": symbol, "value": float(values[-1])}
+        except Exception as e:
+            self.logger.error(f"Error fetching RSI for {symbol}: {e}")
+            return None
+
+    def get_earnings(self, symbol: str) -> Optional[Dict]:
+        """Get the nearest earnings date and minimal summary information."""
+        try:
+            calendar_method = getattr(self.client, "earnings_calendar", None)
+            if callable(calendar_method):
+                from_date = date.today() - timedelta(days=30)
+                to_date = date.today() + timedelta(days=180)
+                raw = calendar_method(
+                    _from=from_date.strftime("%Y-%m-%d"),
+                    to=to_date.strftime("%Y-%m-%d"),
+                    symbol=symbol,
+                    international=False,
+                )
+                entries = (
+                    (raw or {}).get("earningsCalendar")
+                    or (raw or {}).get("earnings")
+                    or (raw or {}).get("data")
+                    or []
+                )
+                if entries:
+                    item = entries[0]
+                    return {
+                        "symbol": symbol,
+                        "date": item.get("date"),
+                        "eps_actual": item.get("epsActual"),
+                        "eps_estimate": item.get("epsEstimate"),
+                        "revenue_actual": item.get("revenueActual"),
+                        "revenue_estimate": item.get("revenueEstimate"),
+                    }
+
+            company_method = getattr(self.client, "company_earnings", None)
+            if callable(company_method):
+                try:
+                    entries = company_method(symbol, limit=1) or []
+                except TypeError:
+                    entries = company_method(symbol) or []
+                if entries:
+                    item = entries[0]
+                    return {
+                        "symbol": symbol,
+                        "date": item.get("date") or item.get("period"),
+                        "eps_actual": item.get("actual"),
+                        "eps_estimate": item.get("estimate"),
+                        "revenue_actual": item.get("revenueActual"),
+                        "revenue_estimate": item.get("revenueEstimate"),
+                    }
+        except Exception as e:
+            self.logger.error(f"Error fetching earnings for {symbol}: {e}")
+
+        return None
 
     def _get_us_symbols_over_500m(self, ttl_seconds: int = 3600) -> List[str]:
         """
