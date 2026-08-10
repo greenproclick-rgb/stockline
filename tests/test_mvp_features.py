@@ -18,11 +18,12 @@ def _make_voice_handler(finnhub_client=None):
     return VoiceHandler(manager, Mock())
 
 
-def _make_api_client(finnhub_client=None):
+def _make_api_client(finnhub_client=None, token="test-token"):
     app = Flask(__name__)
     settings = Mock()
     settings.environment = "test"
     settings.debug = False
+    settings.watchlist_api_token = token
     APIEndpoints(app, finnhub_client or Mock(spec=FinnhubClient), settings)
     return app.test_client()
 
@@ -155,10 +156,28 @@ class TestApiEndpointsMvp:
 
     def test_watchlist_endpoint_adds_and_lists_symbols(self):
         client = _make_api_client()
+        headers = {"X-Stockline-Token": "test-token", "X-Stockline-Owner": "caller-1"}
 
-        add_resp = client.post("/api/watchlists/caller-1/favorites", json={"symbol": "tsla"})
-        list_resp = client.get("/api/watchlists/caller-1/favorites")
+        add_resp = client.post("/api/watchlists/caller-1/favorites", json={"symbol": "tsla"}, headers=headers)
+        list_resp = client.get("/api/watchlists/caller-1/favorites", headers=headers)
 
         assert add_resp.status_code == 200
         assert list_resp.status_code == 200
         assert list_resp.get_json()["data"]["symbols"] == ["TSLA"]
+
+    def test_watchlist_endpoint_requires_store_token(self):
+        client = _make_api_client()
+
+        resp = client.get("/api/watchlists/caller-1/favorites")
+
+        assert resp.status_code == 403
+
+    def test_watchlist_endpoint_rejects_missing_server_token_config(self):
+        client = _make_api_client(token=None)
+
+        resp = client.get(
+            "/api/watchlists/caller-1/favorites",
+            headers={"X-Stockline-Token": "test-token", "X-Stockline-Owner": "caller-1"},
+        )
+
+        assert resp.status_code == 403

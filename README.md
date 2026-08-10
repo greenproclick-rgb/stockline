@@ -72,8 +72,8 @@ python src/main.py
 - Voice news narration: `POST /call/stock-analysis?symbol=AAPL`
 - API historical narration: `GET /api/history/AAPL/voice`
 - API earnings hook: `GET /api/earnings/AAPL`
-- API watchlists: `GET|POST|DELETE /api/watchlists/<owner_id>/<name>`
-- API portfolios: `GET|POST|DELETE /api/portfolios/<owner_id>/<name>`
+- API watchlists: `GET|POST|DELETE /api/watchlists/<owner_id>/<name>` with `WATCHLIST_API_TOKEN` set and `X-Stockline-Token` / `X-Stockline-Owner` headers
+- API portfolios: `GET|POST|DELETE /api/portfolios/<owner_id>/<name>` with `WATCHLIST_API_TOKEN` set and `X-Stockline-Token` / `X-Stockline-Owner` headers
 
 ## Configuration
 

@@ -31,6 +31,29 @@ class APIEndpoints:
         self.data_processor = DataProcessor()
         self.watchlist_store = WatchlistPortfolioStore()
         self.setup_routes()
+
+    def _authorize_store_access(self, owner_id: str):
+        """Require a simple API token and matching owner header for mutable personal data."""
+        token = getattr(self.settings, 'watchlist_api_token', None)
+        if not token:
+            return jsonify({
+                'success': False,
+                'error': 'Watchlist API token is not configured'
+            }), 403
+        if request.headers.get('X-Stockline-Token') != token:
+            return jsonify({
+                'success': False,
+                'error': 'Unauthorized'
+            }), 403
+
+        owner_header = request.headers.get('X-Stockline-Owner')
+        if not owner_header or owner_header != owner_id:
+            return jsonify({
+                'success': False,
+                'error': 'Owner mismatch'
+            }), 403
+
+        return None
     
     def setup_routes(self):
         """Setup all API routes."""
@@ -377,6 +400,9 @@ class APIEndpoints:
         def watchlist(owner_id, name):
             """Manage an in-memory watchlist."""
             try:
+                auth_error = self._authorize_store_access(owner_id)
+                if auth_error:
+                    return auth_error
                 payload = request.get_json(silent=True) or {}
                 symbol = payload.get('symbol') or request.args.get('symbol')
 
@@ -400,6 +426,9 @@ class APIEndpoints:
         def portfolio(owner_id, name):
             """Manage an in-memory portfolio."""
             try:
+                auth_error = self._authorize_store_access(owner_id)
+                if auth_error:
+                    return auth_error
                 payload = request.get_json(silent=True) or {}
                 symbol = payload.get('symbol') or request.args.get('symbol')
 

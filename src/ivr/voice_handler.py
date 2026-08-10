@@ -13,6 +13,7 @@ class VoiceHandler:
         self.settings = settings
         self.app = Flask(__name__)
         self.finnhub_client = getattr(call_manager, 'finnhub_client', None)
+        self._news_cache = {}
         self.setup_routes()
 
     def setup_routes(self):
@@ -174,6 +175,7 @@ class VoiceHandler:
 
             try:
                 news = self.finnhub_client.get_company_news(symbol)
+                self._news_cache[symbol] = news or []
                 briefing = NewsNarrator.build_briefing(news or [], symbol=symbol, max_items=3)
                 index = max(int(request.args.get('index', 0)), 0)
                 if briefing['headline_count'] and index < briefing['headline_count']:
@@ -213,7 +215,10 @@ class VoiceHandler:
                 return Response(str(response), mimetype='application/xml')
 
             try:
-                news = self.finnhub_client.get_company_news(symbol)
+                news = self._news_cache.get(symbol)
+                if news is None:
+                    news = self.finnhub_client.get_company_news(symbol) or []
+                    self._news_cache[symbol] = news
                 playlist = NewsNarrator.build_playlist(news or [])
                 if not playlist or index >= len(playlist):
                     response.say("There are no more headlines right now.")
@@ -227,7 +232,10 @@ class VoiceHandler:
                     else:
                         response.redirect('/call/incoming')
                 elif digit == '2':
-                    response.redirect(f'/call/stock-analysis?symbol={symbol}&index={index + 1}')
+                    if index + 1 < len(playlist):
+                        response.redirect(f'/call/stock-analysis?symbol={symbol}&index={index + 1}')
+                    else:
+                        response.redirect('/call/incoming')
                 else:
                     response.redirect('/call/incoming')
             except Exception as e:

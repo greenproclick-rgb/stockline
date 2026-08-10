@@ -138,7 +138,7 @@ class FinnhubClient:
             to_date = date.today()
             from_date = to_date - timedelta(days=days_back)
             start_ts = int(datetime.combine(from_date, datetime.min.time()).timestamp())
-            end_ts = int(datetime.combine(to_date, datetime.min.time()).timestamp())
+            end_ts = int(datetime.combine(to_date + timedelta(days=1), datetime.min.time()).timestamp()) - 1
             candles = self.client.stock_candles(symbol, resolution, start_ts, end_ts)
             closes = (candles or {}).get("c") or []
             highs = (candles or {}).get("h") or []
@@ -192,7 +192,12 @@ class FinnhubClient:
                 to=to_date.strftime("%Y-%m-%d"),
                 symbol=symbol,
             )
-            calendar = (data or {}).get("earningsCalendar") or data or []
+            if isinstance(data, dict):
+                calendar = data.get("earningsCalendar") or []
+            elif isinstance(data, list):
+                calendar = data
+            else:
+                calendar = []
             if not calendar:
                 return None
 
