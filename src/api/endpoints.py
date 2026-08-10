@@ -253,7 +253,7 @@ class APIEndpoints:
                 logger.error(f"Error fetching historical summary for {symbol}: {e}")
                 return jsonify({
                     'success': False,
-                    'error': str(e)
+                    'error': 'Historical performance service is currently unavailable'
                 }), 500
 
         @self.app.route('/api/news/<symbol>', methods=['GET'])
@@ -271,7 +271,7 @@ class APIEndpoints:
                 logger.error(f"Error fetching stock news for {symbol}: {e}")
                 return jsonify({
                     'success': False,
-                    'error': str(e)
+                    'error': 'Stock news is currently unavailable'
                 }), 500
 
         @self.app.route('/api/news/market', methods=['GET'])
@@ -288,7 +288,7 @@ class APIEndpoints:
                 logger.error(f"Error fetching market news: {e}")
                 return jsonify({
                     'success': False,
-                    'error': str(e)
+                    'error': 'Market news is currently unavailable'
                 }), 500
 
         @self.app.route('/api/news/article', methods=['GET'])
@@ -335,7 +335,7 @@ class APIEndpoints:
                 logger.error(f"Error fetching earnings for {symbol}: {e}")
                 return jsonify({
                     'success': False,
-                    'error': str(e)
+                    'error': 'Earnings information is currently unavailable'
                 }), 500
 
         @self.app.route('/api/collections/<collection_type>/<name>', methods=['POST', 'GET'])
@@ -353,8 +353,8 @@ class APIEndpoints:
                     'success': False,
                     'error': f'{collection_type} {name} was not found'
                 }), 404
-            except (ValueError, KeyError) as e:
-                return jsonify({'success': False, 'error': str(e)}), 400
+            except (ValueError, KeyError):
+                return jsonify({'success': False, 'error': 'Invalid collection request'}), 400
 
         @self.app.route('/api/collections/<collection_type>/<name>/symbols', methods=['POST'])
         def add_collection_symbol(collection_type, name):
@@ -364,8 +364,8 @@ class APIEndpoints:
                 symbol = payload.get('symbol')
                 data = self.collection_store.add_symbol(collection_type, name, symbol)
                 return jsonify({'success': True, 'data': data}), 200
-            except (ValueError, KeyError) as e:
-                return jsonify({'success': False, 'error': str(e)}), 400
+            except (ValueError, KeyError):
+                return jsonify({'success': False, 'error': 'Invalid collection request'}), 400
 
         @self.app.route('/api/collections/<collection_type>/<name>/symbols/<symbol>', methods=['DELETE'])
         def remove_collection_symbol(collection_type, name, symbol):
@@ -373,8 +373,8 @@ class APIEndpoints:
             try:
                 data = self.collection_store.remove_symbol(collection_type, name, symbol)
                 return jsonify({'success': True, 'data': data}), 200
-            except (ValueError, KeyError) as e:
-                return jsonify({'success': False, 'error': str(e)}), 400
+            except (ValueError, KeyError):
+                return jsonify({'success': False, 'error': 'Invalid collection request'}), 400
         
         @self.app.route('/api/cache/clear', methods=['POST'])
         def clear_cache():
