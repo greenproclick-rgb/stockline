@@ -305,8 +305,8 @@ class VoiceHandler:
             if summary:
                 response.say(summary)
             response.say(
-                "Full article playback controls are being prepared. "
-                "This foundation will support play, pause, skip, rewind, and playback speed controls."
+                "More article options are coming soon. "
+                "Future controls will support play, pause, skip, rewind, and playback speed changes."
             )
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')

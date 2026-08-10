@@ -296,7 +296,13 @@ class APIEndpoints:
             """Expose a placeholder article playback contract for future IVR controls."""
             scope = request.args.get('scope', 'stock')
             symbol = request.args.get('symbol', '').upper()
-            index = int(request.args.get('index', 0))
+            try:
+                index = int(request.args.get('index', 0))
+            except (TypeError, ValueError):
+                return jsonify({
+                    'success': False,
+                    'error': 'index must be an integer'
+                }), 400
             article = self.news_service.get_article(scope, symbol=symbol, index=index)
             if article:
                 return jsonify({

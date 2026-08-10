@@ -94,7 +94,7 @@ class InMemoryCollectionStore:
         return deepcopy(collection)
 
     def remove_symbol(self, collection_type: str, name: str, symbol: str) -> Dict:
-        collection = self._require_collection(collection_type, name)
+        collection = self._get_collection_ref(collection_type, name)
         normalized_symbol = self._normalize_symbol(symbol)
         collection['symbols'] = [item for item in collection['symbols'] if item != normalized_symbol]
         return deepcopy(collection)
@@ -111,7 +111,7 @@ class InMemoryCollectionStore:
         collection = self.get_collection(collection_type, name)
         return collection['symbols'] if collection else []
 
-    def _require_collection(self, collection_type: str, name: str) -> Dict:
+    def _get_collection_ref(self, collection_type: str, name: str) -> Dict:
         collection_key = self._normalize_collection_type(collection_type)
         normalized_name = self._normalize_name(name)
         collection = self._collections[collection_key].get(normalized_name)

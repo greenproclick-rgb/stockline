@@ -1,4 +1,5 @@
 import logging
+import inspect
 import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Dict, List, Optional
@@ -177,8 +178,11 @@ class FinnhubClient:
 
         try:
             try:
-                data = indicator_method(symbol, "D", start_at, end_at, "rsi", {"timeperiod": 14})
-            except TypeError:
+                parameters = inspect.signature(indicator_method).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+
+            if {"symbol", "resolution", "indicator"}.issubset(parameters):
                 data = indicator_method(
                     symbol=symbol,
                     resolution="D",
@@ -187,6 +191,8 @@ class FinnhubClient:
                     indicator="rsi",
                     indicator_fields={"timeperiod": 14},
                 )
+            else:
+                data = indicator_method(symbol, "D", start_at, end_at, "rsi", {"timeperiod": 14})
 
             values = (data or {}).get("rsi") or []
             if not values:
