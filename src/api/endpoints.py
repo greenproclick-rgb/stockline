@@ -319,7 +319,7 @@ class APIEndpoints:
                 logger.error(f"Error formatting historical performance for voice: {e}")
                 return jsonify({
                     'success': False,
-                    'error': str(e)
+                    'error': 'Historical performance is currently unavailable'
                 }), 500
 
         @self.app.route('/api/news/<symbol>/voice', methods=['GET'])
@@ -345,7 +345,7 @@ class APIEndpoints:
                 logger.error(f"Error building stock news briefing for {symbol}: {e}")
                 return jsonify({
                     'success': False,
-                    'error': str(e)
+                    'error': 'Stock news is currently unavailable'
                 }), 500
 
         @self.app.route('/api/news/market/voice', methods=['GET'])
@@ -369,7 +369,7 @@ class APIEndpoints:
                 logger.error(f"Error building market news briefing: {e}")
                 return jsonify({
                     'success': False,
-                    'error': str(e)
+                    'error': 'Market news is currently unavailable'
                 }), 500
 
         @self.app.route('/api/earnings/<symbol>', methods=['GET'])
@@ -393,7 +393,7 @@ class APIEndpoints:
                 logger.error(f"Error fetching earnings for {symbol}: {e}")
                 return jsonify({
                     'success': False,
-                    'error': str(e)
+                    'error': 'Earnings data is currently unavailable'
                 }), 500
 
         @self.app.route('/api/watchlists/<owner_id>/<name>', methods=['GET', 'POST', 'DELETE'])
@@ -420,7 +420,7 @@ class APIEndpoints:
                 return jsonify({'success': True, 'data': data}), 200
             except Exception as e:
                 logger.error(f"Error managing watchlist {owner_id}/{name}: {e}")
-                return jsonify({'success': False, 'error': str(e)}), 500
+                return jsonify({'success': False, 'error': 'Watchlist service is currently unavailable'}), 500
 
         @self.app.route('/api/portfolios/<owner_id>/<name>', methods=['GET', 'POST', 'DELETE'])
         def portfolio(owner_id, name):
@@ -452,4 +452,4 @@ class APIEndpoints:
                 return jsonify({'success': True, 'data': data}), 200
             except Exception as e:
                 logger.error(f"Error managing portfolio {owner_id}/{name}: {e}")
-                return jsonify({'success': False, 'error': str(e)}), 500
+                return jsonify({'success': False, 'error': 'Portfolio service is currently unavailable'}), 500
