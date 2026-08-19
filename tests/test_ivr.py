@@ -448,6 +448,7 @@ class TestVoiceHandlerMarketRecap:
         assert resp.status_code == 200
         assert 'Fed holds rates steady' in body
         assert 'recap' in body.lower()
+        assert '<Redirect method="POST">/call/incoming</Redirect>' in body
 
     def test_market_recap_no_news(self):
         """No news returned; should say unavailable."""

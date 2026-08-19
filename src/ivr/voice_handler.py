@@ -50,7 +50,7 @@ class VoiceHandler:
             elif digit == '4':
                 response.redirect('/call/market-recap')
             else:
-                response.redirect('/call/incoming')
+                response.redirect('/call/incoming', method='POST')
             return Response(str(response), mimetype='application/xml')
 
         # 2. QUOTE FLOW — Finnhub-backed
@@ -242,7 +242,7 @@ class VoiceHandler:
             if not self.finnhub_client:
                 logger.error("Finnhub client is not available for market recap.")
                 response.say("Market recap is currently unavailable.")
-                response.redirect('/call/incoming')
+                response.redirect('/call/incoming', method='POST')
                 return Response(str(response), mimetype='application/xml')
 
             try:
@@ -259,5 +259,5 @@ class VoiceHandler:
                 logger.error(f"Market recap error: {e}")
                 response.say("Market recap is currently unavailable.")
 
-            response.redirect('/call/incoming')
+            response.redirect('/call/incoming', method='POST')
             return Response(str(response), mimetype='application/xml')
