@@ -2,6 +2,7 @@ from flask import Flask, request, Response
 from twilio.twiml.voice_response import VoiceResponse, Gather
 import logging
 from src.ivr.utils import map_t9_to_symbol
+from src.ivr.recap_store import RecapStore
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +12,7 @@ class VoiceHandler:
         self.settings = settings
         self.app = Flask(__name__)
         self.finnhub_client = getattr(call_manager, 'finnhub_client', None)
+        self.recap_store = RecapStore()
         self.setup_routes()
 
     def setup_routes(self):
@@ -190,7 +192,7 @@ class VoiceHandler:
         # 3. MARKET MOVERS — Finnhub-backed
         @self.app.route('/call/movers-menu', methods=['POST'])
         def movers_menu():
-            digit = request.form.get('Digits', '')
+            digit = (request.form.get('Digits') or '').strip()
             response = VoiceResponse()
 
             if not self.finnhub_client:
@@ -199,7 +201,15 @@ class VoiceHandler:
                 response.redirect('/call/incoming')
                 return Response(str(response), mimetype='application/xml')
 
-            side = 'gainers' if digit == '1' else 'losers' if digit == '2' else 'actives'
+            side_map = {'1': 'gainers', '2': 'losers', '3': 'actives'}
+            side = side_map.get(digit)
+
+            if not side:
+                gather = Gather(num_digits=1, action='/call/movers-menu', method='POST', timeout=10)
+                gather.say("Invalid selection. Press 1 for top gainers. Press 2 for top losers. Press 3 for most active.")
+                response.append(gather)
+                return Response(str(response), mimetype='application/xml')
+
             try:
                 movers = self.finnhub_client.get_market_movers(side)
                 if movers:
@@ -218,7 +228,7 @@ class VoiceHandler:
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
 
-        # 4. MARKET RECAP — Finnhub-backed
+        # 4. MARKET RECAP — Finnhub-backed + persisted history
         @self.app.route('/call/market-recap', methods=['POST'])
         def market_recap():
             response = VoiceResponse()
@@ -226,9 +236,15 @@ class VoiceHandler:
             if not self.finnhub_client:
                 logger.error("Finnhub client is not available for market recap.")
                 response.say("Market recap is currently unavailable.")
+                history = self.recap_store.get_recent(limit=3)
+                if history:
+                    response.say("Here are recent saved recap headlines.")
+                    for h in history:
+                        response.say(h)
                 response.redirect('/call/incoming')
                 return Response(str(response), mimetype='application/xml')
 
+            spoken = []
             try:
                 news = self.finnhub_client.get_market_news()
                 if news:
@@ -236,12 +252,21 @@ class VoiceHandler:
                     for item in news[:3]:
                         headline = item.get('headline', '').strip()
                         if headline:
+                            spoken.append(headline)
                             response.say(headline + ".")
+                    if spoken:
+                        self.recap_store.add_headlines(spoken)
                 else:
-                    response.say("Market recap is currently unavailable.")
+                    response.say("Live market recap is currently unavailable.")
             except Exception as e:
                 logger.error(f"Market recap error: {e}")
-                response.say("Market recap is currently unavailable.")
+                response.say("Live market recap is currently unavailable.")
+
+            history = self.recap_store.get_recent(limit=3)
+            if history:
+                response.say("Recent saved recap headlines.")
+                for h in history:
+                    response.say(h + ".")
 
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
