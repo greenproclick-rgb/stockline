@@ -150,13 +150,22 @@ class FinnhubClient:
             self.logger.error(f"Error building US >500M universe: {e}")
             return []
 
+    def _get_cached_us_symbols_over_500m(self) -> List[str]:
+        """Return cached US >$500M symbols without triggering a rebuild."""
+        now = time.time()
+        cached_symbols = self._US_500M_UNIVERSE_CACHE.get("symbols")
+        expires_at = self._US_500M_UNIVERSE_CACHE.get("expires_at", 0)
+        if cached_symbols and now < expires_at:
+            return cached_symbols  # type: ignore[return-value]
+        return []
+
     def get_market_movers(self, side: str = "gainers", count: int = 3) -> Optional[List[Dict]]:
         """
-        Compute market movers from US-listed symbols with market cap > $500M.
-        Fallback to _MOVER_SYMBOLS if universe fetch fails.
+        Compute market movers quickly from a bounded symbol set.
+        Prefer pre-cached US >$500M universe; fallback to curated symbols.
         """
         try:
-            universe = self._get_us_symbols_over_500m()
+            universe = self._get_cached_us_symbols_over_500m()
             if not universe:
                 universe = self._MOVER_SYMBOLS
 

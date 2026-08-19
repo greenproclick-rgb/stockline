@@ -624,3 +624,25 @@ class TestFinnhubClientMethods:
 
         assert result is None
 
+    def test_get_market_movers_uses_fallback_without_universe_rebuild(self, fh_client, mock_raw_client):
+        """When universe cache is cold, movers should use fallback symbols without stock_symbols fetch."""
+        original_symbols = fh_client.__class__._MOVER_SYMBOLS
+        original_cache = fh_client.__class__._US_500M_UNIVERSE_CACHE
+        fh_client.__class__._US_500M_UNIVERSE_CACHE = {"symbols": None, "expires_at": 0}
+        fh_client.__class__._MOVER_SYMBOLS = ['AAPL', 'MSFT']
+
+        def fake_get_quote(sym):
+            data = {
+                'AAPL': {'symbol': 'AAPL', 'current_price': 102.0, 'previous_close': 100.0},
+                'MSFT': {'symbol': 'MSFT', 'current_price': 99.0, 'previous_close': 100.0},
+            }
+            return data.get(sym)
+
+        fh_client.get_quote = fake_get_quote
+        result = fh_client.get_market_movers('gainers', count=2)
+        fh_client.__class__._MOVER_SYMBOLS = original_symbols
+        fh_client.__class__._US_500M_UNIVERSE_CACHE = original_cache
+
+        assert result is not None
+        assert [item['symbol'] for item in result] == ['AAPL', 'MSFT']
+        mock_raw_client.stock_symbols.assert_not_called()
