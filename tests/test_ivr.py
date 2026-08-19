@@ -424,6 +424,17 @@ class TestVoiceHandlerMovers:
         assert resp.status_code == 200
         assert '<Redirect method="POST">/call/incoming</Redirect>' in body
 
+    def test_menu_digit_4_redirects_to_market_recap_with_post(self):
+        """Main menu option 4 should redirect with POST to market recap."""
+        vh = _make_voice_handler()
+        client = vh.app.test_client()
+
+        resp = client.post('/call/menu', data={'Digits': '4'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert '<Redirect method="POST">/call/market-recap</Redirect>' in body
+
 
 # ---------------------------------------------------------------------------
 # VoiceHandler — market recap

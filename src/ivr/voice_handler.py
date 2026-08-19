@@ -48,7 +48,7 @@ class VoiceHandler:
                 response.append(gather)
                 response.redirect('/call/incoming', method='POST')
             elif digit == '4':
-                response.redirect('/call/market-recap')
+                response.redirect('/call/market-recap', method='POST')
             else:
                 response.redirect('/call/incoming', method='POST')
             return Response(str(response), mimetype='application/xml')
