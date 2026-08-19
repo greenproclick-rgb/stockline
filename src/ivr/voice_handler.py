@@ -37,9 +37,16 @@ class VoiceHandler:
                 gather.say("Enter symbol digits followed by pound.")
                 response.append(gather)
             elif digit == '3':
-                gather = Gather(num_digits=1, action='/call/movers-menu', method='POST', timeout=5)
+                gather = Gather(
+                    num_digits=1,
+                    action='/call/movers-menu',
+                    method='POST',
+                    timeout=5,
+                    action_on_empty_result=True,
+                )
                 gather.say("For top gainers, press 1. For top losers, press 2. For most active, press 3.")
                 response.append(gather)
+                response.redirect('/call/incoming', method='POST')
             elif digit == '4':
                 response.redirect('/call/market-recap')
             else:
@@ -196,14 +203,14 @@ class VoiceHandler:
             if not self.finnhub_client:
                 logger.error("Finnhub client is not available for movers.")
                 response.say("Market movers are currently unavailable.")
-                response.redirect('/call/incoming')
+                response.redirect('/call/incoming', method='POST')
                 return Response(str(response), mimetype='application/xml')
 
             # Validate input: only accept 1, 2, or 3
             if digit not in ['1', '2', '3']:
                 logger.warning("ivr.movers.invalid_digit digit=%r", digit)
                 response.say("Invalid selection. Returning to main menu.")
-                response.redirect('/call/incoming')
+                response.redirect('/call/incoming', method='POST')
                 return Response(str(response), mimetype='application/xml')
 
             side_map = {'1': 'gainers', '2': 'losers', '3': 'actives'}
@@ -224,7 +231,7 @@ class VoiceHandler:
                 logger.error(f"Market movers error (side={side}): {e}")
                 response.say("Market movers data is currently unavailable.")
 
-            response.redirect('/call/incoming')
+            response.redirect('/call/incoming', method='POST')
             return Response(str(response), mimetype='application/xml')
 
         # 4. MARKET RECAP — Finnhub-backed
@@ -254,4 +261,3 @@ class VoiceHandler:
 
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
-

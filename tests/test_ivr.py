@@ -399,6 +399,31 @@ class TestVoiceHandlerMovers:
         assert resp.status_code == 200
         assert 'unavailable' in body.lower()
 
+    def test_menu_digit_3_gather_has_empty_result_action(self):
+        """Main menu option 3 should gather with actionOnEmptyResult and POST fallback redirect."""
+        vh = _make_voice_handler()
+        client = vh.app.test_client()
+
+        resp = client.post('/call/menu', data={'Digits': '3'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert 'actionOnEmptyResult="true"' in body
+        assert '<Redirect method="POST">/call/incoming</Redirect>' in body
+
+    def test_movers_redirects_back_with_post_method(self):
+        """Movers response should redirect back to incoming using POST."""
+        fh = Mock(spec=FinnhubClient)
+        fh.get_market_movers.return_value = self._mover_data()
+        vh = _make_voice_handler(fh)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': '1'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert '<Redirect method="POST">/call/incoming</Redirect>' in body
+
 
 # ---------------------------------------------------------------------------
 # VoiceHandler — market recap
