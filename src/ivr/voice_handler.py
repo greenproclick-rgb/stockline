@@ -37,7 +37,7 @@ class VoiceHandler:
                 gather.say("Enter symbol digits followed by pound.")
                 response.append(gather)
             elif digit == '3':
-                gather = Gather(num_digits=1, action='/call/movers-menu', method='POST', timeout=10)
+                gather = Gather(num_digits=1, action='/call/movers-menu', method='POST', timeout=10, numDigits=1)
                 gather.say("For top gainers, press 1. For top losers, press 2. For most active, press 3.")
                 response.append(gather)
             elif digit == '4':
@@ -199,7 +199,18 @@ class VoiceHandler:
                 response.redirect('/call/incoming')
                 return Response(str(response), mimetype='application/xml')
 
-            side = 'gainers' if digit == '1' else 'losers' if digit == '2' else 'actives'
+            # Validate input: only accept 1, 2, or 3
+            if digit not in ['1', '2', '3']:
+                logger.warning("ivr.movers.invalid_digit digit=%r", digit)
+                response.say("Invalid selection. Please try again.")
+                gather = Gather(num_digits=1, action='/call/movers-menu', method='POST', timeout=10)
+                gather.say("For top gainers, press 1. For top losers, press 2. For most active, press 3.")
+                response.append(gather)
+                return Response(str(response), mimetype='application/xml')
+
+            side_map = {'1': 'gainers', '2': 'losers', '3': 'actives'}
+            side = side_map[digit]
+
             try:
                 movers = self.finnhub_client.get_market_movers(side)
                 if movers:
