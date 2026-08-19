@@ -64,6 +64,18 @@ def _make_voice_handler(finnhub_client=None):
 class TestVoiceHandlerQuote:
     """Tests for the /call/get-quote route."""
 
+    def test_incoming_gather_has_empty_result_fallback(self):
+        """Main menu gather should fall back to the incoming route instead of ending the call."""
+        vh = _make_voice_handler()
+        client = vh.app.test_client()
+
+        resp = client.post('/call/incoming')
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert 'actionOnEmptyResult="true"' in body
+        assert '<Redirect method="POST">/call/incoming</Redirect>' in body
+
     def test_get_quote_success(self):
         """Finnhub returns a price; response should include the price and submenu."""
         fh = Mock(spec=FinnhubClient)
@@ -79,6 +91,8 @@ class TestVoiceHandlerQuote:
         assert 'AAPL' in body
         # Submenu gather should be present
         assert 'quote-options' in body
+        assert 'actionOnEmptyResult="true"' in body
+        assert '<Redirect method="POST">/call/incoming</Redirect>' in body
 
     def test_get_quote_no_symbol(self):
         """No digits and no query param; should say it could not understand."""
@@ -90,6 +104,7 @@ class TestVoiceHandlerQuote:
 
         assert resp.status_code == 200
         assert 'could not understand' in body.lower()
+        assert '<Redirect method="POST">/call/incoming</Redirect>' in body
 
     def test_get_quote_t9_digits(self):
         """T9 digit sequence is decoded to symbol, quote is fetched."""
@@ -118,6 +133,7 @@ class TestVoiceHandlerQuote:
 
         assert resp.status_code == 200
         assert "couldn't find" in body.lower() or "could not" in body.lower()
+        assert '<Redirect method="POST">/call/incoming</Redirect>' in body
 
     def test_get_quote_no_client(self):
         """No Finnhub client; should return config error."""
@@ -131,6 +147,7 @@ class TestVoiceHandlerQuote:
 
         assert resp.status_code == 200
         assert 'configuration error' in body.lower() or 'internal' in body.lower()
+        assert '<Redirect method="POST">/call/incoming</Redirect>' in body
 
     def test_get_quote_exception(self):
         """Finnhub raises exception; should return error message."""
@@ -144,6 +161,7 @@ class TestVoiceHandlerQuote:
 
         assert resp.status_code == 200
         assert 'error' in body.lower()
+        assert '<Redirect method="POST">/call/incoming</Redirect>' in body
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +180,7 @@ class TestVoiceHandlerQuoteOptions:
         body = resp.data.decode()
 
         assert resp.status_code == 200
-        assert 'stock-info' in body
+        assert '<Redirect method="POST">/call/stock-info?symbol=AAPL</Redirect>' in body
         assert 'AAPL' in body
 
     def test_digit_2_redirects_to_stock_analysis(self):
@@ -174,7 +192,7 @@ class TestVoiceHandlerQuoteOptions:
         body = resp.data.decode()
 
         assert resp.status_code == 200
-        assert 'stock-analysis' in body
+        assert '<Redirect method="POST">/call/stock-analysis?symbol=MSFT</Redirect>' in body
         assert 'MSFT' in body
 
     def test_star_redirects_to_incoming(self):
@@ -186,7 +204,7 @@ class TestVoiceHandlerQuoteOptions:
         body = resp.data.decode()
 
         assert resp.status_code == 200
-        assert 'incoming' in body
+        assert '<Redirect method="POST">/call/incoming</Redirect>' in body
 
 
 # ---------------------------------------------------------------------------

@@ -19,13 +19,20 @@ class VoiceHandler:
         def handle_incoming_call():
             response = VoiceResponse()
             response.say("Welcome to Stockline.")
-            gather = Gather(num_digits=1, action='/call/menu', method='POST', timeout=10)
+            gather = Gather(
+                num_digits=1,
+                action='/call/menu',
+                method='POST',
+                timeout=10,
+                action_on_empty_result=True,
+            )
             gather.say(
                 "Press 1 for stock quotes. Press 2 for voice search. "
                 "Press 3 for market movers. Press 4 for market recap. "
                 "Press star at any time to return here."
             )
             response.append(gather)
+            response.redirect('/call/incoming', method='POST')
             return Response(str(response), mimetype='application/xml')
 
         @self.app.route('/call/menu', methods=['POST'])
@@ -33,9 +40,17 @@ class VoiceHandler:
             digit = request.form.get('Digits', '')
             response = VoiceResponse()
             if digit == '1':
-                gather = Gather(num_digits=10, finish_on_key='#', action='/call/get-quote', method='POST', timeout=15)
+                gather = Gather(
+                    num_digits=10,
+                    finish_on_key='#',
+                    action='/call/get-quote',
+                    method='POST',
+                    timeout=15,
+                    action_on_empty_result=True,
+                )
                 gather.say("Enter symbol digits followed by pound.")
                 response.append(gather)
+                response.redirect('/call/incoming', method='POST')
             elif digit == '3':
                 gather = Gather(
                     num_digits=1,
@@ -62,7 +77,7 @@ class VoiceHandler:
             if not raw_symbol:
                 response = VoiceResponse()
                 response.say("I could not understand that symbol.")
-                response.redirect('/call/incoming')
+                response.redirect('/call/incoming', method='POST')
                 return Response(str(response), mimetype='application/xml')
 
             symbol = raw_symbol.upper()
@@ -71,7 +86,7 @@ class VoiceHandler:
             if not self.finnhub_client:
                 logger.error("Finnhub client is not available in VoiceHandler.")
                 response.say("Internal configuration error.")
-                response.redirect('/call/incoming')
+                response.redirect('/call/incoming', method='POST')
                 return Response(str(response), mimetype='application/xml')
 
             try:
@@ -79,7 +94,7 @@ class VoiceHandler:
                 price = quote.get('current_price') if quote else None
                 if not price:
                     response.say(f"I'm sorry, I couldn't find a quote for {symbol}.")
-                    response.redirect('/call/incoming')
+                    response.redirect('/call/incoming', method='POST')
                 else:
                     response.say(f"{symbol} is trading at {price:.2f} dollars.")
                     gather = Gather(
@@ -87,13 +102,15 @@ class VoiceHandler:
                         action=f'/call/quote-options?symbol={symbol}',
                         method='POST',
                         timeout=15,
+                        action_on_empty_result=True,
                     )
                     gather.say("Press 1 for full stock information. Press 2 for analysis. Press star to go back.")
                     response.append(gather)
+                    response.redirect('/call/incoming', method='POST')
             except Exception as e:
                 logger.error(f"Finnhub quote error for {symbol}: {e}")
                 response.say("Error reaching the quote service.")
-                response.redirect('/call/incoming')
+                response.redirect('/call/incoming', method='POST')
             return Response(str(response), mimetype='application/xml')
 
         # 2a. QUOTE SUBMENU
@@ -103,11 +120,11 @@ class VoiceHandler:
             symbol = request.args.get('symbol', '').upper()
             response = VoiceResponse()
             if digit == '1':
-                response.redirect(f'/call/stock-info?symbol={symbol}')
+                response.redirect(f'/call/stock-info?symbol={symbol}', method='POST')
             elif digit == '2':
-                response.redirect(f'/call/stock-analysis?symbol={symbol}')
+                response.redirect(f'/call/stock-analysis?symbol={symbol}', method='POST')
             else:
-                response.redirect('/call/incoming')
+                response.redirect('/call/incoming', method='POST')
             return Response(str(response), mimetype='application/xml')
 
         # 2b. FULL STOCK INFORMATION
@@ -118,7 +135,7 @@ class VoiceHandler:
 
             if not symbol or not self.finnhub_client:
                 response.say("Sorry, I could not retrieve stock information.")
-                response.redirect('/call/incoming')
+                response.redirect('/call/incoming', method='POST')
                 return Response(str(response), mimetype='application/xml')
 
             parts = []
@@ -163,7 +180,7 @@ class VoiceHandler:
             else:
                 response.say(f"I could not retrieve detailed information for {symbol}.")
 
-            response.redirect('/call/incoming')
+            response.redirect('/call/incoming', method='POST')
             return Response(str(response), mimetype='application/xml')
 
         # 2c. STOCK ANALYSIS (recent news)
@@ -174,7 +191,7 @@ class VoiceHandler:
 
             if not symbol or not self.finnhub_client:
                 response.say("Sorry, I could not retrieve analysis.")
-                response.redirect('/call/incoming')
+                response.redirect('/call/incoming', method='POST')
                 return Response(str(response), mimetype='application/xml')
 
             try:
@@ -191,7 +208,7 @@ class VoiceHandler:
                 logger.error(f"Stock analysis error for {symbol}: {e}")
                 response.say(f"Analysis for {symbol} is currently unavailable.")
 
-            response.redirect('/call/incoming')
+            response.redirect('/call/incoming', method='POST')
             return Response(str(response), mimetype='application/xml')
 
         # 3. MARKET MOVERS — Finnhub-backed
