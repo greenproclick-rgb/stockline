@@ -23,6 +23,7 @@ class VoiceHandler:
             gather.say(
                 "Press 1 for stock quotes. Press 2 for voice search. "
                 "Press 3 for market movers. Press 4 for market recap. "
+                "Press 5 to leave a message and hear it repeated back. "
                 "Press star at any time to return here."
             )
             response.append(gather)
@@ -42,6 +43,8 @@ class VoiceHandler:
                 response.append(gather)
             elif digit == '4':
                 response.redirect('/call/market-recap')
+            elif digit == '5':
+                response.redirect('/call/leave-message')
             else:
                 response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
@@ -215,6 +218,39 @@ class VoiceHandler:
                 logger.error(f"Market movers error (side={side}): {e}")
                 response.say("Market movers data is currently unavailable.")
 
+            response.redirect('/call/incoming')
+            return Response(str(response), mimetype='application/xml')
+
+        # 5. LEAVE A MESSAGE — caller speaks, AI repeats it back
+        @self.app.route('/call/leave-message', methods=['POST'])
+        def leave_message():
+            response = VoiceResponse()
+            response.say("Please leave your message after the beep. Press pound when you are done.")
+            response.record(
+                action='/call/playback-message',
+                method='POST',
+                finish_on_key='#',
+                max_length=60,
+                play_beep=True,
+                transcribe=True,
+                transcribe_callback='/call/playback-message',
+            )
+            return Response(str(response), mimetype='application/xml')
+
+        @self.app.route('/call/playback-message', methods=['POST'])
+        def playback_message():
+            response = VoiceResponse()
+            transcription = request.form.get('TranscriptionText', '').strip()
+            if transcription:
+                response.say("Here is your message.")
+                response.say(transcription)
+            else:
+                recording_url = request.form.get('RecordingUrl', '')
+                if recording_url:
+                    response.say("Here is your message.")
+                    response.play(recording_url)
+                else:
+                    response.say("Sorry, I could not capture your message. Please try again.")
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
 
