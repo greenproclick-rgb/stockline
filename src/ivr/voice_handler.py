@@ -14,6 +14,12 @@ class VoiceHandler:
         self.setup_routes()
 
     def setup_routes(self):
+        def _menu_digit(raw_digits):
+            digits = (raw_digits or "").strip()
+            if digits.endswith("#"):
+                digits = digits[:-1]
+            return digits[:1]
+
         # 1. MAIN MENU
         @self.app.route('/call/incoming', methods=['POST'])
         def handle_incoming_call():
@@ -30,7 +36,7 @@ class VoiceHandler:
 
         @self.app.route('/call/menu', methods=['POST'])
         def handle_menu_selection():
-            digit = request.form.get('Digits', '')
+            digit = _menu_digit(request.form.get('Digits', ''))
             response = VoiceResponse()
             if digit == '1':
                 gather = Gather(num_digits=10, finish_on_key='#', action='/call/get-quote', method='POST', timeout=15)
@@ -92,7 +98,7 @@ class VoiceHandler:
         # 2a. QUOTE SUBMENU
         @self.app.route('/call/quote-options', methods=['POST'])
         def quote_options():
-            digit = request.form.get('Digits', '')
+            digit = _menu_digit(request.form.get('Digits', ''))
             symbol = request.args.get('symbol', '').upper()
             response = VoiceResponse()
             if digit == '1':
@@ -190,7 +196,7 @@ class VoiceHandler:
         # 3. MARKET MOVERS — Finnhub-backed
         @self.app.route('/call/movers-menu', methods=['POST'])
         def movers_menu():
-            digit = request.form.get('Digits', '')
+            digit = _menu_digit(request.form.get('Digits', ''))
             response = VoiceResponse()
 
             if not self.finnhub_client:
@@ -245,4 +251,3 @@ class VoiceHandler:
 
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
-

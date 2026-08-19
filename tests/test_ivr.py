@@ -373,6 +373,18 @@ class TestVoiceHandlerMovers:
         assert resp.status_code == 200
         fh.get_market_movers.assert_called_once_with('actives')
 
+    def test_movers_actives_with_pound(self):
+        """Digit 3# → actives."""
+        fh = Mock(spec=FinnhubClient)
+        fh.get_market_movers.return_value = self._mover_data()
+        vh = _make_voice_handler(fh)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': '3#'})
+
+        assert resp.status_code == 200
+        fh.get_market_movers.assert_called_once_with('actives')
+
     def test_movers_no_data(self):
         """Finnhub returns None; should say unavailable."""
         fh = Mock(spec=FinnhubClient)
@@ -623,4 +635,3 @@ class TestFinnhubClientMethods:
         fh_client.__class__._MOVER_SYMBOLS = FinnhubClient._MOVER_SYMBOLS
 
         assert result is None
-
