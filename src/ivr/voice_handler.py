@@ -221,38 +221,41 @@ class VoiceHandler:
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
 
-        # 5. LEAVE A MESSAGE — caller speaks, AI repeats it back
+        # 5. LEAVE A MESSAGE — caller speaks, AI voice repeats it back
         @self.app.route('/call/leave-message', methods=['POST'])
         def leave_message():
             response = VoiceResponse()
             response.say("Please leave your message after the beep. Press pound when you are done.")
             response.record(
-                action='/call/playback-message',
+                action='/call/playback-recording',
                 method='POST',
                 finish_on_key='#',
                 max_length=60,
                 play_beep=True,
                 transcribe=True,
-                transcribe_callback='/call/playback-message',
+                transcribe_callback='/call/log-transcription',
             )
             return Response(str(response), mimetype='application/xml')
 
-        @self.app.route('/call/playback-message', methods=['POST'])
-        def playback_message():
+        @self.app.route('/call/playback-recording', methods=['POST'])
+        def playback_recording():
             response = VoiceResponse()
-            transcription = request.form.get('TranscriptionText', '').strip()
-            if transcription:
+            recording_url = request.form.get('RecordingUrl', '').strip()
+            if recording_url:
                 response.say("Here is your message.")
-                response.say(transcription)
+                response.play(recording_url)
             else:
-                recording_url = request.form.get('RecordingUrl', '')
-                if recording_url:
-                    response.say("Here is your message.")
-                    response.play(recording_url)
-                else:
-                    response.say("Sorry, I could not capture your message. Please try again.")
+                response.say("Sorry, I could not capture your message. Please try again.")
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
+
+        @self.app.route('/call/log-transcription', methods=['POST'])
+        def log_transcription():
+            transcription = request.form.get('TranscriptionText', '').strip()
+            recording_sid = request.form.get('RecordingSid', '')
+            if transcription:
+                logger.info(f"Transcription for recording {recording_sid}: {transcription}")
+            return Response('', status=204)
 
         # 4. MARKET RECAP — Finnhub-backed
         @self.app.route('/call/market-recap', methods=['POST'])
