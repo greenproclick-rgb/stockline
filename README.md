@@ -5,6 +5,10 @@ An Interactive Voice Response (IVR) system that connects with Finnhub API to pro
 ## Features
 
 - Real-time stock quotes via voice interface
+- Expanded quote narration with trend, 52-week range, P/E, analyst targets, RSI fallback, and earnings hooks
+- Historical performance narration for the last week, month, and quarter
+- In-memory watchlist and portfolio foundation with API endpoints for create/add/remove/list
+- Stock and market headline narration with article playback placeholders for future controls
 - Integration with Finnhub API
 - Interactive voice response system
 - Stock data retrieval and voice synthesis
@@ -58,6 +62,12 @@ stockline/
 ```bash
 python src/main.py
 ```
+
+### MVP voice/API additions
+
+- Voice quote flow now offers expanded quote details, historical performance, stock headlines, and earnings summaries.
+- Market-wide headlines are available from the IVR main menu.
+- Watchlist and portfolio foundations are exposed at `/api/collections/<watchlist|portfolio>/<name>`.
 
 ## Configuration
 
