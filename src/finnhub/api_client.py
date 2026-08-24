@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
 import finnhub
@@ -47,8 +47,9 @@ class FinnhubClient:
                 "symbol": symbol,
                 "52_week_high": metric.get("52WeekHigh"),
                 "52_week_low": metric.get("52WeekLow"),
-                "pe_ratio": metric.get("peTTM"),
+                "pe_ratio": metric.get("peTTM") or metric.get("peBasicExclExtraTTM"),
                 "beta": metric.get("beta"),
+                "rsi": metric.get("rsi14") or metric.get("rsi"),
             }
         except Exception as e:
             self.logger.error(f"Error fetching basic financials for {symbol}: {e}")
@@ -79,6 +80,7 @@ class FinnhubClient:
                 "hold": latest.get("hold", 0),
                 "sell": latest.get("sell", 0),
                 "strong_sell": latest.get("strongSell", 0),
+                "period": latest.get("period"),
             }
         except Exception as e:
             self.logger.error(f"Error fetching recommendation trends for {symbol}: {e}")
@@ -95,7 +97,12 @@ class FinnhubClient:
                 to=to_date.strftime("%Y-%m-%d"),
             )
             return [
-                {"headline": item.get("headline", ""), "summary": item.get("summary", "")}
+                {
+                    "headline": item.get("headline", ""),
+                    "summary": item.get("summary", ""),
+                    "url": item.get("url"),
+                    "source": item.get("source"),
+                }
                 for item in (news or [])[:5]
             ]
         except Exception as e:
@@ -106,9 +113,108 @@ class FinnhubClient:
         """Get general market news headlines."""
         try:
             news = self.client.general_news(category, min_id=0)
-            return [{"headline": item.get("headline", "")} for item in (news or [])[:5]]
+            return [
+                {
+                    "headline": item.get("headline", ""),
+                    "summary": item.get("summary", ""),
+                    "url": item.get("url"),
+                    "source": item.get("source"),
+                }
+                for item in (news or [])[:5]
+            ]
         except Exception as e:
             self.logger.error(f"Error fetching market news: {e}")
+            return None
+
+    def get_historical_performance(
+        self,
+        symbol: str,
+        days_back: int,
+        period_label: Optional[str] = None,
+        resolution: str = "D",
+    ) -> Optional[Dict]:
+        """Get historical performance for a stock over a lookback window."""
+        try:
+            to_date = date.today()
+            from_date = to_date - timedelta(days=days_back)
+            start_ts = int(datetime.combine(from_date, datetime.min.time()).timestamp())
+            end_ts = int(datetime.combine(to_date + timedelta(days=1), datetime.min.time()).timestamp()) - 1
+            candles = self.client.stock_candles(symbol, resolution, start_ts, end_ts)
+            closes = (candles or {}).get("c") or []
+            highs = (candles or {}).get("h") or []
+            lows = (candles or {}).get("l") or []
+
+            if (candles or {}).get("s") != "ok" or len(closes) < 2:
+                return None
+
+            start_price = closes[0]
+            end_price = closes[-1]
+            if start_price in (None, 0) or end_price is None:
+                return None
+
+            absolute_change = end_price - start_price
+            percent_change = (absolute_change / start_price) * 100
+            return {
+                "symbol": symbol,
+                "period": period_label or f"{days_back}-day period",
+                "start_price": start_price,
+                "end_price": end_price,
+                "absolute_change": absolute_change,
+                "percent_change": percent_change,
+                "high": max(highs) if highs else None,
+                "low": min(lows) if lows else None,
+            }
+        except Exception as e:
+            self.logger.error(f"Error fetching historical performance for {symbol}: {e}")
+            return None
+
+    def get_multi_period_performance(self, symbol: str) -> Dict[str, Dict]:
+        """Get week, month, and quarter performance snapshots for a symbol."""
+        periods = {
+            "week": 7,
+            "month": 30,
+            "quarter": 90,
+        }
+        results: Dict[str, Dict] = {}
+        for label, days_back in periods.items():
+            performance = self.get_historical_performance(symbol, days_back, period_label=label)
+            if performance:
+                results[label] = performance
+        return results
+
+    def get_earnings_summary(self, symbol: str, days_forward: int = 120) -> Optional[Dict]:
+        """Get the nearest earnings date and summary details when available."""
+        try:
+            from_date = date.today()
+            to_date = from_date + timedelta(days=days_forward)
+            data = self.client.earnings_calendar(
+                _from=from_date.strftime("%Y-%m-%d"),
+                to=to_date.strftime("%Y-%m-%d"),
+                symbol=symbol,
+            )
+            if isinstance(data, dict):
+                calendar = data.get("earningsCalendar") or []
+            elif isinstance(data, list):
+                calendar = data
+            else:
+                calendar = []
+            if not calendar:
+                return None
+
+            entry = calendar[0]
+            return {
+                "symbol": symbol,
+                "earnings_date": entry.get("date"),
+                "eps_actual": entry.get("epsActual"),
+                "eps_estimate": entry.get("epsEstimate"),
+                "revenue_actual": entry.get("revenueActual"),
+                "revenue_estimate": entry.get("revenueEstimate"),
+                "hour": entry.get("hour"),
+                "quarter": entry.get("quarter"),
+                "year": entry.get("year"),
+            }
+        except Exception as e:
+            self.logger.error(f"Error fetching earnings summary for {symbol}: {e}")
             return None
 
     def _get_us_symbols_over_500m(self, ttl_seconds: int = 3600) -> List[str]:

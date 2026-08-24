@@ -27,6 +27,7 @@ class Settings:
     
     # Redis
     redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    watchlist_api_token = os.getenv('WATCHLIST_API_TOKEN')
     
     # IVR Settings
     max_retries = int(os.getenv('MAX_RETRIES', '3'))
