@@ -1,19 +1,12 @@
 import logging
-import time
-from datetime import date, timedelta
+import requests
 from typing import Dict, List, Optional
-
+from datetime import date, timedelta
 import finnhub
 
 
 class FinnhubClient:
     """Wrapper around finnhub-python with app-specific helpers."""
-
-    # Fallback list only (used if dynamic universe fetch fails)
-    _MOVER_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL"]
-
-    # In-memory cache for US symbols with market cap > $500M
-    _US_500M_UNIVERSE_CACHE: Dict[str, object] = {"symbols": None, "expires_at": 0}
 
     def __init__(self, api_key: str):
         self.logger = logging.getLogger(__name__)
@@ -111,88 +104,76 @@ class FinnhubClient:
             self.logger.error(f"Error fetching market news: {e}")
             return None
 
-    def _get_us_symbols_over_500m(self, ttl_seconds: int = 3600) -> List[str]:
-        """
-        Build universe: US-listed stocks with market cap > $500M.
-        Finnhub company_profile2.marketCapitalization is in millions.
-        """
-        now = time.time()
-        cached_symbols = self._US_500M_UNIVERSE_CACHE.get("symbols")
-        expires_at = self._US_500M_UNIVERSE_CACHE.get("expires_at", 0)
-
-        if cached_symbols and now < expires_at:
-            return cached_symbols  # type: ignore[return-value]
-
-        symbols: List[str] = []
-        try:
-            all_us = self.client.stock_symbols("US") or []
-
-            for row in all_us:
-                sym = (row or {}).get("symbol")
-                if not sym:
-                    continue
-                # Optional quick skip to avoid many non-standard tickers
-                if "." in sym:
-                    continue
-
-                try:
-                    profile = self.client.company_profile2(symbol=sym) or {}
-                    market_cap_m = profile.get("marketCapitalization")
-                    if market_cap_m is not None and float(market_cap_m) > 500:
-                        symbols.append(sym)
-                except Exception:
-                    continue
-
-            self._US_500M_UNIVERSE_CACHE["symbols"] = symbols
-            self._US_500M_UNIVERSE_CACHE["expires_at"] = now + ttl_seconds
-            return symbols
-        except Exception as e:
-            self.logger.error(f"Error building US >500M universe: {e}")
-            return []
-
     def get_market_movers(self, side: str = "gainers", count: int = 3) -> Optional[List[Dict]]:
         """
-        Compute market movers from US-listed symbols with market cap > $500M.
-        Fallback to _MOVER_SYMBOLS if universe fetch fails.
+        Get market movers using FMP API (instant, no slow loop needed).
+        This is a placeholder - actual implementation uses FMPClient below.
+        """
+        self.logger.warning("Use FMPClient.get_market_movers() instead for fast S&P 500 movers")
+        return None
+
+
+class FMPClient:
+    """Financial Modeling Prep API client for market movers."""
+    
+    BASE_URL = "https://financialmodelingprep.com/api/v3"
+    
+    def __init__(self, api_key: str):
+        self.logger = logging.getLogger(__name__)
+        self.api_key = api_key
+    
+    def get_market_movers(self, side: str = "gainers", count: int = 10) -> Optional[List[Dict]]:
+        """
+        Get top S&P 500 gainers, losers, or most active stocks.
+        Uses FMP's pre-calculated market movers endpoint.
+        
+        Args:
+            side: "gainers", "losers", or "actives"
+            count: Number of results to return (default 10)
+        
+        Returns:
+            List of dicts with symbol, pct_change, price
         """
         try:
-            universe = self._get_us_symbols_over_500m()
-            if not universe:
-                universe = self._MOVER_SYMBOLS
-
-            candidates = []
-            for sym in universe:
-                quote = self.get_quote(sym)
-                if (
-                    quote
-                    and quote.get("current_price")
-                    and quote.get("previous_close")
-                    and quote["previous_close"] != 0
-                ):
-                    pct = (
-                        (quote["current_price"] - quote["previous_close"])
-                        / quote["previous_close"]
-                        * 100
-                    )
-                    candidates.append(
-                        {
-                            "symbol": sym,
-                            "pct_change": pct,
-                            "price": quote["current_price"],
-                        }
-                    )
-
-            if not candidates:
-                return None
-
             if side == "gainers":
-                candidates.sort(key=lambda x: x["pct_change"], reverse=True)
+                endpoint = f"{self.BASE_URL}/stock_market/gainers"
             elif side == "losers":
-                candidates.sort(key=lambda x: x["pct_change"])
-            else:
-                candidates.sort(key=lambda x: abs(x["pct_change"]), reverse=True)
-
-            return candidates[:count]
+                endpoint = f"{self.BASE_URL}/stock_market/losers"
+            else:  # actives
+                endpoint = f"{self.BASE_URL}/stock_market/actives"
+            
+            params = {"apikey": self.api_key}
+            self.logger.info(f"Fetching {side} from FMP API")
+            
+            response = requests.get(endpoint, params=params, timeout=5)
+            response.raise_for_status()
+            
+            data = response.json()
+            if not data:
+                self.logger.warning(f"No {side} data from FMP")
+                return None
+            
+            # Transform FMP response to our format
+            movers = []
+            for item in data[:count]:
+                try:
+                    movers.append({
+                        "symbol": item.get("symbol"),
+                        "pct_change": float(item.get("change", 0)),
+                        "price": float(item.get("price", 0)),
+                    })
+                except (ValueError, TypeError):
+                    continue
+            
+            self.logger.info(f"Returned {len(movers)} {side}")
+            return movers if movers else None
+        
+        except requests.exceptions.Timeout:
+            self.logger.error(f"FMP API timeout for {side}")
+            return None
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"FMP API error for {side}: {e}")
+            return None
         except Exception as e:
-            self.logger.error(f"Error fetching market movers: {e}")
+            self.logger.error(f"Unexpected error fetching {side}: {e}")
             return None
