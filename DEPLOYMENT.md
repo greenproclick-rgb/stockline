@@ -34,6 +34,8 @@ cp .env.example .env
 Edit `.env` with your credentials:
 
 ```env
+ALPHAVANTAGE_API_KEY=your_alpha_vantage_key_here
+FMP_API_KEY=your_fmp_key_here  # optional fallback
 FINNHUB_API_KEY=your_finnhub_key_here
 TWILIO_ACCOUNT_SID=your_twilio_account_sid
 TWILIO_AUTH_TOKEN=your_twilio_auth_token
@@ -145,10 +147,16 @@ gunicorn -w 4 -b 0.0.0.0:5000 src.main:app
 
 ### 2. Using Cloud Platforms
 
+#### Railway
+- Set `ALPHAVANTAGE_API_KEY` in Railway Variables (required for market movers `3 -> 1/2/3`)
+- Optional fallback keys: `FMP_API_KEY`, `FINNHUB_API_KEY`
+- Redeploy after updating environment variables
+
 #### Heroku
 ```bash
 heroku create stockline-ivr
 heroku config:set FINNHUB_API_KEY=your_key
+heroku config:set ALPHAVANTAGE_API_KEY=your_key
 heroku config:set TWILIO_ACCOUNT_SID=your_sid
 heroku config:set TWILIO_AUTH_TOKEN=your_token
 git push heroku main

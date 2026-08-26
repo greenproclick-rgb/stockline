@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from src.ivr.call_manager import CallManager
 from src.ivr.voice_handler import VoiceHandler
-from src.finnhub.api_client import FinnhubClient
+from src.finnhub.api_client import FinnhubClient, AlphaVantageClient, MarketMoversService
 
 
 class TestCallManager:
@@ -49,10 +49,11 @@ class TestCallManager:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_voice_handler(finnhub_client=None):
+def _make_voice_handler(finnhub_client=None, market_movers_service=None):
     """Build a VoiceHandler backed by a mock CallManager."""
     mock_manager = Mock()
     mock_manager.finnhub_client = finnhub_client or Mock(spec=FinnhubClient)
+    mock_manager.market_movers_service = market_movers_service
     mock_settings = Mock()
     return VoiceHandler(mock_manager, mock_settings)
 
@@ -330,54 +331,54 @@ class TestVoiceHandlerMovers:
 
     def test_movers_gainers(self):
         """Digit 1 → gainers; response should list symbols going up."""
-        fh = Mock(spec=FinnhubClient)
-        fh.get_market_movers.return_value = self._mover_data()
-        vh = _make_voice_handler(fh)
+        movers_service = Mock(spec=MarketMoversService)
+        movers_service.get_market_movers.return_value = self._mover_data()
+        vh = _make_voice_handler(market_movers_service=movers_service)
         client = vh.app.test_client()
 
         resp = client.post('/call/movers-menu', data={'Digits': '1'})
         body = resp.data.decode()
 
         assert resp.status_code == 200
-        fh.get_market_movers.assert_called_once_with('gainers')
+        movers_service.get_market_movers.assert_called_once_with('gainers')
         assert 'NVDA' in body
         assert 'gainers' in body.lower()
 
     def test_movers_losers(self):
         """Digit 2 → losers; response should list symbols going down."""
-        fh = Mock(spec=FinnhubClient)
-        fh.get_market_movers.return_value = [
+        movers_service = Mock(spec=MarketMoversService)
+        movers_service.get_market_movers.return_value = [
             {'symbol': 'META', 'pct_change': -3.0, 'price': 300.0},
         ]
-        vh = _make_voice_handler(fh)
+        vh = _make_voice_handler(market_movers_service=movers_service)
         client = vh.app.test_client()
 
         resp = client.post('/call/movers-menu', data={'Digits': '2'})
         body = resp.data.decode()
 
         assert resp.status_code == 200
-        fh.get_market_movers.assert_called_once_with('losers')
+        movers_service.get_market_movers.assert_called_once_with('losers')
         assert 'META' in body
         assert 'down' in body.lower()
 
     def test_movers_actives(self):
         """Digit 3 → actives."""
-        fh = Mock(spec=FinnhubClient)
-        fh.get_market_movers.return_value = self._mover_data()
-        vh = _make_voice_handler(fh)
+        movers_service = Mock(spec=MarketMoversService)
+        movers_service.get_market_movers.return_value = self._mover_data()
+        vh = _make_voice_handler(market_movers_service=movers_service)
         client = vh.app.test_client()
 
         resp = client.post('/call/movers-menu', data={'Digits': '3'})
         body = resp.data.decode()
 
         assert resp.status_code == 200
-        fh.get_market_movers.assert_called_once_with('actives')
+        movers_service.get_market_movers.assert_called_once_with('actives')
 
     def test_movers_no_data(self):
-        """Finnhub returns None; should say unavailable."""
-        fh = Mock(spec=FinnhubClient)
-        fh.get_market_movers.return_value = None
-        vh = _make_voice_handler(fh)
+        """All providers return None; should say unavailable."""
+        movers_service = Mock(spec=MarketMoversService)
+        movers_service.get_market_movers.return_value = None
+        vh = _make_voice_handler(market_movers_service=movers_service)
         client = vh.app.test_client()
 
         resp = client.post('/call/movers-menu', data={'Digits': '1'})
@@ -387,9 +388,10 @@ class TestVoiceHandlerMovers:
         assert 'unavailable' in body.lower()
 
     def test_movers_no_client(self):
-        """No Finnhub client; should say unavailable."""
+        """No provider configured; should say unavailable."""
         mock_manager = Mock()
         mock_manager.finnhub_client = None
+        mock_manager.market_movers_service = None
         vh = VoiceHandler(mock_manager, Mock())
         client = vh.app.test_client()
 
@@ -624,3 +626,77 @@ class TestFinnhubClientMethods:
 
         assert result is None
 
+
+class TestAlphaVantageMovers:
+    @pytest.mark.parametrize(
+        "side,payload_key",
+        [
+            ("gainers", "top_gainers"),
+            ("losers", "top_losers"),
+            ("actives", "most_actively_traded"),
+        ],
+    )
+    def test_alpha_vantage_normalizes_payload_by_side(self, side, payload_key):
+        client = AlphaVantageClient(api_key="demo")
+        payload = {
+            "top_gainers": [
+                {"ticker": "NVDA", "price": "131.50", "change_percentage": "4.50%"},
+                {"ticker": "AAPL", "price": "220.10", "change_percentage": "1.25%"},
+            ],
+            "top_losers": [
+                {"ticker": "META", "price": "305.80", "change_percentage": "-3.20%"},
+            ],
+            "most_actively_traded": [
+                {"ticker": "TSLA", "price": "245.55", "change_percentage": "0.82%"},
+            ],
+        }
+
+        with patch("src.finnhub.api_client.requests.get") as mock_get:
+            mock_resp = Mock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = payload
+            mock_resp.raise_for_status.return_value = None
+            mock_get.return_value = mock_resp
+
+            movers = client.get_market_movers(side, count=2)
+
+        expected_by_side = {
+            "gainers": [
+                {"symbol": "NVDA", "pct_change": 4.5, "price": 131.5},
+                {"symbol": "AAPL", "pct_change": 1.25, "price": 220.1},
+            ],
+            "losers": [{"symbol": "META", "pct_change": -3.2, "price": 305.8}],
+            "actives": [{"symbol": "TSLA", "pct_change": 0.82, "price": 245.55}],
+        }
+
+        assert movers == expected_by_side[side]
+        assert client.last_request_meta["status_code"] == 200
+        assert client.last_request_meta["result_count"] == len(expected_by_side[side])
+
+    def test_alpha_vantage_missing_key_is_classified(self):
+        client = AlphaVantageClient(api_key=None)
+        movers = client.get_market_movers("gainers")
+        assert movers is None
+        assert client.last_request_meta["error_type"] == "missing_key"
+
+
+class TestMarketMoversFallback:
+    def test_fallback_to_next_provider_when_alpha_fails(self):
+        alpha = Mock()
+        alpha.name = "alphavantage"
+        alpha.get_market_movers.return_value = None
+        alpha.last_request_meta = {"provider": "alphavantage", "status_code": 429, "error_type": "upstream_error"}
+
+        fallback = Mock()
+        fallback.name = "fmp"
+        fallback.get_market_movers.return_value = [
+            {"symbol": "TSLA", "pct_change": -2.0, "price": 250.0}
+        ]
+        fallback.last_request_meta = {"provider": "fmp", "status_code": 200}
+
+        service = MarketMoversService([alpha, fallback])
+        movers = service.get_market_movers("losers", count=1)
+
+        alpha.get_market_movers.assert_called_once_with("losers", count=1)
+        fallback.get_market_movers.assert_called_once_with("losers", count=1)
+        assert movers == [{"symbol": "TSLA", "pct_change": -2.0, "price": 250.0}]

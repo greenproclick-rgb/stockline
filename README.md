@@ -63,6 +63,11 @@ python src/main.py
 
 See `.env.example` for required environment variables.
 
+For IVR market movers (menu `3 -> 1/2/3`), set:
+
+- `ALPHAVANTAGE_API_KEY` (primary provider)
+- `FMP_API_KEY` (optional fallback)
+
 ## License
 
 MIT

@@ -11,6 +11,7 @@ class VoiceHandler:
         self.settings = settings
         self.app = Flask(__name__)
         self.finnhub_client = getattr(call_manager, 'finnhub_client', None)
+        self.market_movers_service = getattr(call_manager, 'market_movers_service', None)
         self.setup_routes()
 
     def setup_routes(self):
@@ -193,12 +194,6 @@ class VoiceHandler:
             digit = request.form.get('Digits', '')
             response = VoiceResponse()
 
-            if not self.finnhub_client:
-                logger.error("Finnhub client is not available for movers.")
-                response.say("Market movers are currently unavailable.")
-                response.redirect('/call/incoming')
-                return Response(str(response), mimetype='application/xml')
-
             # Validate input: only accept 1, 2, or 3
             if digit not in ['1', '2', '3']:
                 logger.warning("ivr.movers.invalid_digit digit=%r", digit)
@@ -208,10 +203,19 @@ class VoiceHandler:
 
             side_map = {'1': 'gainers', '2': 'losers', '3': 'actives'}
             side = side_map[digit]
+            logger.info("ivr.movers.route path=3->%s category=%s", digit, side)
 
             try:
-                movers = self.finnhub_client.get_market_movers(side)
+                movers_client = self.market_movers_service or self.finnhub_client
+                if not movers_client:
+                    logger.error("ivr.movers.no_provider side=%s", side)
+                    response.say("Market movers data is currently unavailable.")
+                    response.redirect('/call/incoming')
+                    return Response(str(response), mimetype='application/xml')
+
+                movers = movers_client.get_market_movers(side)
                 if movers:
+                    logger.info("ivr.movers.success side=%s count=%s", side, len(movers))
                     response.say(f"Here are the top {len(movers)} {side}.")
                     for m in movers:
                         direction = "up" if m['pct_change'] >= 0 else "down"
@@ -219,9 +223,10 @@ class VoiceHandler:
                             f"{m['symbol']}, {direction} {abs(m['pct_change']):.2f} percent."
                         )
                 else:
+                    logger.warning("ivr.movers.empty side=%s", side)
                     response.say("Market movers data is currently unavailable.")
             except Exception as e:
-                logger.error(f"Market movers error (side={side}): {e}")
+                logger.error("ivr.movers.error side=%s error=%s", side, e)
                 response.say("Market movers data is currently unavailable.")
 
             response.redirect('/call/incoming')
@@ -254,4 +259,3 @@ class VoiceHandler:
 
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
-

@@ -35,6 +35,9 @@ class Settings:
     # FMP
     fmp_api_key = os.getenv('FMP_API_KEY')
 
+    # Alpha Vantage
+    alphavantage_api_key = os.getenv('ALPHAVANTAGE_API_KEY')
+
     def __init__(self):
         """Validate required settings."""
         if not self.finnhub_api_key:
