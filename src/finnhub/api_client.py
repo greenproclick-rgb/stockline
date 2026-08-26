@@ -2,6 +2,7 @@ import logging
 import requests
 from typing import Dict, List, Optional
 from datetime import date, timedelta
+import re
 import finnhub
 
 
@@ -121,8 +122,10 @@ class FMPClient:
     def __init__(self, api_key: str):
         self.logger = logging.getLogger(__name__)
         self.api_key = api_key
+        self.name = "fmp"
+        self.last_request_meta = {}
     
-    def get_market_movers(self, side: str = "gainers", count: int = 10) -> Optional[List[Dict]]:
+    def get_market_movers(self, side: str = "gainers", count: int = 3) -> Optional[List[Dict]]:
         """
         Get top S&P 500 gainers, losers, or most active stocks.
         Uses FMP's pre-calculated market movers endpoint.
@@ -135,6 +138,7 @@ class FMPClient:
             List of dicts with symbol, pct_change, price
         """
         try:
+            self.last_request_meta = {"provider": "fmp", "side": side, "status_code": None}
             if side == "gainers":
                 endpoint = f"{self.BASE_URL}/stock_market/gainers"
             elif side == "losers":
@@ -146,11 +150,13 @@ class FMPClient:
             self.logger.info(f"Fetching {side} from FMP API")
             
             response = requests.get(endpoint, params=params, timeout=5)
+            self.last_request_meta["status_code"] = response.status_code
             response.raise_for_status()
             
             data = response.json()
             if not data:
                 self.logger.warning(f"No {side} data from FMP")
+                self.last_request_meta["error_type"] = "empty_data"
                 return None
             
             # Transform FMP response to our format
@@ -166,14 +172,172 @@ class FMPClient:
                     continue
             
             self.logger.info(f"Returned {len(movers)} {side}")
+            self.last_request_meta["result_count"] = len(movers)
             return movers if movers else None
         
         except requests.exceptions.Timeout:
             self.logger.error(f"FMP API timeout for {side}")
+            self.last_request_meta["error_type"] = "upstream_timeout"
             return None
         except requests.exceptions.RequestException as e:
             self.logger.error(f"FMP API error for {side}: {e}")
+            self.last_request_meta["error_type"] = "upstream_error"
             return None
         except Exception as e:
             self.logger.error(f"Unexpected error fetching {side}: {e}")
+            self.last_request_meta["error_type"] = "invalid_payload"
             return None
+
+
+class AlphaVantageClient:
+    """Alpha Vantage API client for market movers."""
+
+    BASE_URL = "https://www.alphavantage.co/query"
+
+    _SIDE_KEY_MAP = {
+        "gainers": "top_gainers",
+        "losers": "top_losers",
+        "actives": "most_actively_traded",
+    }
+
+    def __init__(self, api_key: Optional[str]):
+        self.logger = logging.getLogger(__name__)
+        self.api_key = api_key
+        self.name = "alphavantage"
+        self.last_request_meta = {}
+
+    @staticmethod
+    def _parse_float(value) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            numeric_match = re.search(r"[-+]?\d*\.?\d+", value)
+            if not numeric_match:
+                return None
+            try:
+                return float(numeric_match.group(0))
+            except ValueError:
+                return None
+        return None
+
+    def get_market_movers(self, side: str = "gainers", count: int = 3) -> Optional[List[Dict]]:
+        self.last_request_meta = {"provider": "alphavantage", "side": side, "status_code": None}
+
+        if not self.api_key:
+            self.last_request_meta["error_type"] = "missing_key"
+            self.logger.warning("Alpha Vantage API key missing for market movers request")
+            return None
+
+        key = self._SIDE_KEY_MAP.get(side)
+        if not key:
+            self.last_request_meta["error_type"] = "invalid_payload"
+            return None
+
+        try:
+            response = requests.get(
+                self.BASE_URL,
+                params={"function": "TOP_GAINERS_LOSERS", "apikey": self.api_key},
+                timeout=8,
+            )
+            self.last_request_meta["status_code"] = response.status_code
+            response.raise_for_status()
+            payload = response.json()
+
+            if not isinstance(payload, dict):
+                self.last_request_meta["error_type"] = "invalid_payload"
+                return None
+
+            if payload.get("Note"):
+                self.last_request_meta["error_type"] = "rate_limited"
+                return None
+
+            if payload.get("Information"):
+                self.last_request_meta["error_type"] = "access_denied"
+                return None
+
+            if payload.get("Error Message"):
+                self.last_request_meta["error_type"] = "invalid_request"
+                return None
+
+            entries = payload.get(key)
+            if not isinstance(entries, list) or not entries:
+                self.last_request_meta["error_type"] = "empty_data"
+                return None
+
+            movers = []
+            for item in entries[:count]:
+                if not isinstance(item, dict):
+                    continue
+                symbol = item.get("ticker") or item.get("symbol")
+                pct_change = self._parse_float(item.get("change_percentage"))
+                price = self._parse_float(item.get("price"))
+                if not symbol or pct_change is None:
+                    continue
+                movers.append({"symbol": symbol, "pct_change": pct_change, "price": price or 0.0})
+
+            if not movers:
+                self.last_request_meta["error_type"] = "empty_data"
+                return None
+
+            self.last_request_meta["result_count"] = len(movers)
+            return movers
+
+        except requests.exceptions.Timeout:
+            self.last_request_meta["error_type"] = "upstream_timeout"
+            self.logger.error("Alpha Vantage timeout while fetching movers for side=%s", side)
+            return None
+        except requests.exceptions.RequestException as e:
+            self.last_request_meta["error_type"] = "upstream_error"
+            self.logger.error("Alpha Vantage HTTP error for side=%s: %s", side, e)
+            return None
+        except ValueError:
+            self.last_request_meta["error_type"] = "invalid_payload"
+            self.logger.error("Alpha Vantage returned non-JSON payload for side=%s", side)
+            return None
+        except Exception as e:
+            self.last_request_meta["error_type"] = "invalid_payload"
+            self.logger.error("Unexpected Alpha Vantage payload issue for side=%s: %s", side, e)
+            return None
+
+
+class MarketMoversService:
+    """Fetch market movers with provider fallback."""
+
+    def __init__(self, providers: List):
+        self.logger = logging.getLogger(__name__)
+        self.providers = [p for p in providers if p is not None]
+
+    def get_market_movers(self, side: str, count: int = 3) -> Optional[List[Dict]]:
+        provider_attempt_order = []
+
+        for provider in self.providers:
+            provider_name = getattr(provider, "name", provider.__class__.__name__).lower()
+            provider_attempt_order.append(provider_name)
+
+            movers = provider.get_market_movers(side, count=count)
+            meta = getattr(provider, "last_request_meta", {}) or {}
+            status_code = meta.get("status_code")
+            result_count = len(movers) if movers else 0
+            error_type = meta.get("error_type")
+
+            self.logger.info(
+                "ivr.movers.provider_attempt provider=%s side=%s status=%s count=%s error_type=%s order=%s",
+                provider_name,
+                side,
+                status_code,
+                result_count,
+                error_type,
+                provider_attempt_order,
+            )
+
+            if movers:
+                return movers
+
+        self.logger.warning(
+            "ivr.movers.providers_exhausted side=%s order=%s",
+            side,
+            provider_attempt_order,
+        )
+        return None

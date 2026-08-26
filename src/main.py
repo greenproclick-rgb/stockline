@@ -9,7 +9,7 @@ from flask import Flask
 from src.ivr.call_manager import CallManager
 from src.ivr.voice_handler import VoiceHandler
 from src.api.endpoints import APIEndpoints
-from src.finnhub.api_client import FinnhubClient
+from src.finnhub.api_client import FinnhubClient, FMPClient, AlphaVantageClient, MarketMoversService
 from config.settings import Settings
 
 # Load environment variables
@@ -27,6 +27,12 @@ def initialize_system():
     settings = Settings()
     finnhub_client = FinnhubClient(api_key=os.getenv('FINNHUB_API_KEY'))
     call_manager = CallManager(finnhub_client, settings)
+    market_movers_service = MarketMoversService([
+        AlphaVantageClient(api_key=settings.alphavantage_api_key),
+        FMPClient(api_key=settings.fmp_api_key) if settings.fmp_api_key else None,
+        finnhub_client,
+    ])
+    call_manager.market_movers_service = market_movers_service
     return call_manager, finnhub_client, settings
 
 def create_app():
