@@ -1,7 +1,9 @@
+import os
 from flask import Flask, request, Response
 from twilio.twiml.voice_response import VoiceResponse, Gather
 import logging
 from src.ivr.utils import map_t9_to_symbol
+from src.finnhub.api_client import FMPClient
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +13,14 @@ class VoiceHandler:
         self.settings = settings
         self.app = Flask(__name__)
         self.finnhub_client = getattr(call_manager, 'finnhub_client', None)
+        # Prefer an fmp_client injected on call_manager, otherwise build from env.
+        self.fmp_client = getattr(call_manager, 'fmp_client', None)
+        if self.fmp_client is None:
+            fmp_key = os.getenv('FMP_API_KEY')
+            if fmp_key:
+                self.fmp_client = FMPClient(fmp_key)
+            else:
+                logger.warning("FMP_API_KEY not set; market movers will rely on fallback provider only")
         self.setup_routes()
 
     def setup_routes(self):
@@ -187,17 +197,11 @@ class VoiceHandler:
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')
 
-        # 3. MARKET MOVERS — Finnhub-backed
+        # 3. MARKET MOVERS — FMP primary, Finnhub fallback
         @self.app.route('/call/movers-menu', methods=['POST'])
         def movers_menu():
             digit = request.form.get('Digits', '')
             response = VoiceResponse()
-
-            if not self.finnhub_client:
-                logger.error("Finnhub client is not available for movers.")
-                response.say("Market movers are currently unavailable.")
-                response.redirect('/call/incoming')
-                return Response(str(response), mimetype='application/xml')
 
             # Validate input: only accept 1, 2, or 3
             if digit not in ['1', '2', '3']:
@@ -208,21 +212,48 @@ class VoiceHandler:
 
             side_map = {'1': 'gainers', '2': 'losers', '3': 'actives'}
             side = side_map[digit]
+            logger.info("ivr.movers.request dtmf=%s side=%s", digit, side)
+            # Check configuration
+            if not self.fmp_client and not self.finnhub_client:
+                logger.error("ivr.movers.config_error no FMP or Finnhub client available")
+                response.say("Market movers are not configured. Please contact support.")
+                response.redirect('/call/incoming')
+                return Response(str(response), mimetype='application/xml')
 
-            try:
-                movers = self.finnhub_client.get_market_movers(side)
-                if movers:
-                    response.say(f"Here are the top {len(movers)} {side}.")
-                    for m in movers:
-                        direction = "up" if m['pct_change'] >= 0 else "down"
-                        response.say(
-                            f"{m['symbol']}, {direction} {abs(m['pct_change']):.2f} percent."
-                        )
-                else:
-                    response.say("Market movers data is currently unavailable.")
-            except Exception as e:
-                logger.error(f"Market movers error (side={side}): {e}")
-                response.say("Market movers data is currently unavailable.")
+            movers = None
+
+            # --- Primary: FMP ---
+            if self.fmp_client:
+                try:
+                    logger.info("ivr.movers.provider provider=FMP side=%s", side)
+                    movers = self.fmp_client.get_market_movers(side)
+                    logger.info("ivr.movers.fmp_result side=%s count=%d", side, len(movers) if movers else 0)
+                except Exception as e:
+                    logger.error("ivr.movers.fmp_error side=%s error=%s", side, e)
+                    movers = None
+            else:
+                logger.warning("ivr.movers.fmp_skip no FMP client; going straight to fallback")
+
+            # --- Fallback: Finnhub ---
+            if not movers and self.finnhub_client:
+                try:
+                    logger.info("ivr.movers.provider provider=Finnhub side=%s", side)
+                    movers = self.finnhub_client.get_market_movers(side)
+                    logger.info("ivr.movers.finnhub_result side=%s count=%d", side, len(movers) if movers else 0)
+                except Exception as e:
+                    logger.error("ivr.movers.finnhub_error side=%s error=%s", side, e)
+                    movers = None
+
+            if movers:
+                response.say(f"Here are the top {len(movers)} {side}.")
+                for m in movers:
+                    direction = "up" if m['pct_change'] >= 0 else "down"
+                    response.say(
+                        f"{m['symbol']}, {direction} {abs(m['pct_change']):.2f} percent."
+                    )
+            else:
+                logger.warning("ivr.movers.no_data side=%s all providers exhausted", side)
+                response.say(f"Sorry, {side} data is currently unavailable. Please try again later.")
 
             response.redirect('/call/incoming')
             return Response(str(response), mimetype='application/xml')

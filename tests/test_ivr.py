@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from src.ivr.call_manager import CallManager
 from src.ivr.voice_handler import VoiceHandler
-from src.finnhub.api_client import FinnhubClient
+from src.finnhub.api_client import FinnhubClient, FMPClient
 
 
 class TestCallManager:
@@ -49,12 +49,18 @@ class TestCallManager:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_voice_handler(finnhub_client=None):
+def _make_voice_handler(finnhub_client=None, fmp_client=None):
     """Build a VoiceHandler backed by a mock CallManager."""
     mock_manager = Mock()
     mock_manager.finnhub_client = finnhub_client or Mock(spec=FinnhubClient)
+    # Inject fmp_client via call_manager so VoiceHandler picks it up before env lookup.
+    mock_manager.fmp_client = fmp_client  # may be None (no FMP available in tests by default)
     mock_settings = Mock()
-    return VoiceHandler(mock_manager, mock_settings)
+    with patch.dict('os.environ', {}, clear=False):
+        # Ensure FMP_API_KEY env var doesn't unexpectedly create a real FMPClient.
+        import os as _os
+        _os.environ.pop('FMP_API_KEY', None)
+        return VoiceHandler(mock_manager, mock_settings)
 
 
 # ---------------------------------------------------------------------------
@@ -329,10 +335,76 @@ class TestVoiceHandlerMovers:
         ]
 
     def test_movers_gainers(self):
-        """Digit 1 → gainers; response should list symbols going up."""
+        """Digit 1 → gainers; FMP is called and response lists symbols going up."""
+        fmp = Mock(spec=FMPClient)
+        fmp.get_market_movers.return_value = self._mover_data()
+        vh = _make_voice_handler(fmp_client=fmp)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': '1'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        fmp.get_market_movers.assert_called_once_with('gainers')
+        assert 'NVDA' in body
+        assert 'gainers' in body.lower()
+
+    def test_movers_losers(self):
+        """Digit 2 → losers; FMP is called and response lists symbols going down."""
+        fmp = Mock(spec=FMPClient)
+        fmp.get_market_movers.return_value = [
+            {'symbol': 'META', 'pct_change': -3.0, 'price': 300.0},
+        ]
+        vh = _make_voice_handler(fmp_client=fmp)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': '2'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        fmp.get_market_movers.assert_called_once_with('losers')
+        assert 'META' in body
+        assert 'down' in body.lower()
+
+    def test_movers_actives(self):
+        """Digit 3 → actives; FMP is called."""
+        fmp = Mock(spec=FMPClient)
+        fmp.get_market_movers.return_value = self._mover_data()
+        vh = _make_voice_handler(fmp_client=fmp)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': '3'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        fmp.get_market_movers.assert_called_once_with('actives')
+
+    def test_movers_fmp_fails_fallback_to_finnhub(self):
+        """FMP returns None; Finnhub fallback is called and its data is used."""
+        fmp = Mock(spec=FMPClient)
+        fmp.get_market_movers.return_value = None
         fh = Mock(spec=FinnhubClient)
         fh.get_market_movers.return_value = self._mover_data()
-        vh = _make_voice_handler(fh)
+        vh = _make_voice_handler(finnhub_client=fh, fmp_client=fmp)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': '1'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        fmp.get_market_movers.assert_called_once_with('gainers')
+        fh.get_market_movers.assert_called_once_with('gainers')
+        assert 'NVDA' in body
+
+    def test_movers_fmp_exception_fallback_to_finnhub(self):
+        """FMP raises an exception; Finnhub fallback is called successfully."""
+        fmp = Mock(spec=FMPClient)
+        fmp.get_market_movers.side_effect = Exception("FMP network error")
+        fh = Mock(spec=FinnhubClient)
+        fh.get_market_movers.return_value = [
+            {'symbol': 'AMZN', 'pct_change': 2.0, 'price': 180.0},
+        ]
+        vh = _make_voice_handler(finnhub_client=fh, fmp_client=fmp)
         client = vh.app.test_client()
 
         resp = client.post('/call/movers-menu', data={'Digits': '1'})
@@ -340,44 +412,28 @@ class TestVoiceHandlerMovers:
 
         assert resp.status_code == 200
         fh.get_market_movers.assert_called_once_with('gainers')
-        assert 'NVDA' in body
-        assert 'gainers' in body.lower()
+        assert 'AMZN' in body
 
-    def test_movers_losers(self):
-        """Digit 2 → losers; response should list symbols going down."""
-        fh = Mock(spec=FinnhubClient)
-        fh.get_market_movers.return_value = [
-            {'symbol': 'META', 'pct_change': -3.0, 'price': 300.0},
-        ]
-        vh = _make_voice_handler(fh)
-        client = vh.app.test_client()
-
-        resp = client.post('/call/movers-menu', data={'Digits': '2'})
-        body = resp.data.decode()
-
-        assert resp.status_code == 200
-        fh.get_market_movers.assert_called_once_with('losers')
-        assert 'META' in body
-        assert 'down' in body.lower()
-
-    def test_movers_actives(self):
-        """Digit 3 → actives."""
-        fh = Mock(spec=FinnhubClient)
-        fh.get_market_movers.return_value = self._mover_data()
-        vh = _make_voice_handler(fh)
-        client = vh.app.test_client()
-
-        resp = client.post('/call/movers-menu', data={'Digits': '3'})
-        body = resp.data.decode()
-
-        assert resp.status_code == 200
-        fh.get_market_movers.assert_called_once_with('actives')
-
-    def test_movers_no_data(self):
-        """Finnhub returns None; should say unavailable."""
+    def test_movers_both_providers_fail(self):
+        """Both FMP and Finnhub return None; should say data is unavailable."""
+        fmp = Mock(spec=FMPClient)
+        fmp.get_market_movers.return_value = None
         fh = Mock(spec=FinnhubClient)
         fh.get_market_movers.return_value = None
-        vh = _make_voice_handler(fh)
+        vh = _make_voice_handler(finnhub_client=fh, fmp_client=fmp)
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': '1'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert 'unavailable' in body.lower()
+
+    def test_movers_no_data(self):
+        """No FMP client and Finnhub returns None; should say unavailable."""
+        fh = Mock(spec=FinnhubClient)
+        fh.get_market_movers.return_value = None
+        vh = _make_voice_handler(finnhub_client=fh)
         client = vh.app.test_client()
 
         resp = client.post('/call/movers-menu', data={'Digits': '1'})
@@ -387,17 +443,35 @@ class TestVoiceHandlerMovers:
         assert 'unavailable' in body.lower()
 
     def test_movers_no_client(self):
-        """No Finnhub client; should say unavailable."""
+        """No FMP or Finnhub client; should say movers not configured."""
         mock_manager = Mock()
         mock_manager.finnhub_client = None
-        vh = VoiceHandler(mock_manager, Mock())
+        mock_manager.fmp_client = None
+        import os as _os
+        saved = _os.environ.pop('FMP_API_KEY', None)
+        try:
+            vh = VoiceHandler(mock_manager, Mock())
+        finally:
+            if saved is not None:
+                _os.environ['FMP_API_KEY'] = saved
         client = vh.app.test_client()
 
         resp = client.post('/call/movers-menu', data={'Digits': '1'})
         body = resp.data.decode()
 
         assert resp.status_code == 200
-        assert 'unavailable' in body.lower()
+        assert 'unavailable' in body.lower() or 'not configured' in body.lower() or 'contact support' in body.lower()
+
+    def test_movers_invalid_digit(self):
+        """Digit 9 → invalid selection; response should say 'invalid'."""
+        vh = _make_voice_handler()
+        client = vh.app.test_client()
+
+        resp = client.post('/call/movers-menu', data={'Digits': '9'})
+        body = resp.data.decode()
+
+        assert resp.status_code == 200
+        assert 'invalid' in body.lower()
 
 
 # ---------------------------------------------------------------------------
