@@ -30,7 +30,7 @@ def initialize_system():
     market_movers_service = MarketMoversService([
         AlphaVantageClient(api_key=settings.alphavantage_api_key),
         FMPClient(api_key=settings.fmp_api_key) if settings.fmp_api_key else None,
-        finnhub_client if hasattr(finnhub_client, 'get_market_movers') else None,
+        finnhub_client,
     ])
     call_manager.market_movers_service = market_movers_service
     return call_manager, finnhub_client, settings

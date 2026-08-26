@@ -125,7 +125,7 @@ class FMPClient:
         self.name = "fmp"
         self.last_request_meta = {}
     
-    def get_market_movers(self, side: str = "gainers", count: int = 10) -> Optional[List[Dict]]:
+    def get_market_movers(self, side: str = "gainers", count: int = 3) -> Optional[List[Dict]]:
         """
         Get top S&P 500 gainers, losers, or most active stocks.
         Uses FMP's pre-calculated market movers endpoint.
@@ -213,16 +213,16 @@ class AlphaVantageClient:
         if isinstance(value, (int, float)):
             return float(value)
         if isinstance(value, str):
-            cleaned = re.sub(r"[^0-9+.\-]", "", value)
-            if not cleaned:
+            numeric_match = re.search(r"[-+]?\d*\.?\d+", value)
+            if not numeric_match:
                 return None
             try:
-                return float(cleaned)
+                return float(numeric_match.group(0))
             except ValueError:
                 return None
         return None
 
-    def get_market_movers(self, side: str = "gainers", count: int = 10) -> Optional[List[Dict]]:
+    def get_market_movers(self, side: str = "gainers", count: int = 3) -> Optional[List[Dict]]:
         self.last_request_meta = {"provider": "alphavantage", "side": side, "status_code": None}
 
         if not self.api_key:
@@ -249,8 +249,16 @@ class AlphaVantageClient:
                 self.last_request_meta["error_type"] = "invalid_payload"
                 return None
 
-            if payload.get("Note") or payload.get("Information") or payload.get("Error Message"):
-                self.last_request_meta["error_type"] = "upstream_error"
+            if payload.get("Note"):
+                self.last_request_meta["error_type"] = "rate_limited"
+                return None
+
+            if payload.get("Information"):
+                self.last_request_meta["error_type"] = "access_denied"
+                return None
+
+            if payload.get("Error Message"):
+                self.last_request_meta["error_type"] = "invalid_request"
                 return None
 
             entries = payload.get(key)
