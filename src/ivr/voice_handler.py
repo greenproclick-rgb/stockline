@@ -212,8 +212,7 @@ class VoiceHandler:
 
             side_map = {'1': 'gainers', '2': 'losers', '3': 'actives'}
             side = side_map[digit]
-            logger.info("ivr.movers.request dtmf=3,%s side=%s", digit, side)
-
+            logger.info("ivr.movers.request dtmf=%s side=%s", digit, side)
             # Check configuration
             if not self.fmp_client and not self.finnhub_client:
                 logger.error("ivr.movers.config_error no FMP or Finnhub client available")

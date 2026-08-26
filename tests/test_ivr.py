@@ -463,7 +463,7 @@ class TestVoiceHandlerMovers:
         assert 'unavailable' in body.lower() or 'not configured' in body.lower() or 'contact support' in body.lower()
 
     def test_movers_invalid_digit(self):
-        """Digit 9 → invalid selection."""
+        """Digit 9 → invalid selection; response should say 'invalid'."""
         vh = _make_voice_handler()
         client = vh.app.test_client()
 
@@ -471,7 +471,7 @@ class TestVoiceHandlerMovers:
         body = resp.data.decode()
 
         assert resp.status_code == 200
-        assert 'invalid' in body.lower() or 'incoming' in body.lower()
+        assert 'invalid' in body.lower()
 
 
 # ---------------------------------------------------------------------------
